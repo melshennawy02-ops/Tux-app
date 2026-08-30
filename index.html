@@ -632,7 +632,11 @@ function inventoryListHtml(){
           '<span class="badge" style="background:'+st.bg+';color:'+st.color+'">'+st.label+'</span>' +
           (low ? '<span style="font-size:11px;color:var(--red);display:flex;align-items:center;gap:3px">'+icon("warn",11)+' كمية قليلة</span>' : '') +
         '</div>' +
-        '<div style="font-size:12.5px;color:var(--ink-soft);margin-top:3px">'+esc(item.type)+' · مقاس '+esc(item.size||"—")+' · '+esc(item.color||"بدون لون محدد")+' · الكمية '+item.quantity+(item.price?' · '+esc(item.price)+' ج.م':'')+'</div>' +
+        '<div style="font-size:12.5px;color:var(--ink-soft);margin-top:3px">'+esc(item.type)+' · مقاس '+esc(item.size||"—")+' · '+esc(item.color||"بدون لون محدد")+' · الكمية '+item.quantity+'</div>' +
+        (item.rentPrice || item.salePrice ? '<div style="font-size:12px;color:var(--navy);margin-top:3px;display:flex;gap:10px">'+
+          (item.rentPrice ? '<span>إيجار: <b>'+esc(item.rentPrice)+'</b> ج.م</span>' : '') +
+          (item.salePrice ? '<span>بيع: <b>'+esc(item.salePrice)+'</b> ج.م</span>' : '') +
+        '</div>' : '') +
       '</div>' +
       '<div style="display:flex;gap:6px;flex-shrink:0">' +
         '<button class="btn-icon" data-edit-item="'+item.id+'">'+icon("pencil",15,"var(--navy)")+'</button>' +
@@ -920,9 +924,12 @@ function renderItemModal(item){
       '</div>' +
       '<div style="display:flex;gap:10px">' +
         '<div style="flex:1"><label class="label">الكمية</label><input class="input" id="m_qty" type="number" min="0" value="'+esc(item.quantity)+'"/></div>' +
-        '<div style="flex:1"><label class="label">السعر (اختياري)</label><input class="input" id="m_price" type="number" min="0" value="'+esc(item.price)+'" placeholder="ج.م"/></div>' +
+        '<div style="flex:1"><label class="label">الحالة</label><select class="input" id="m_status">'+statusOpts+'</select></div>' +
       '</div>' +
-      '<div><label class="label">الحالة</label><select class="input" id="m_status">'+statusOpts+'</select></div>' +
+      '<div style="display:flex;gap:10px">' +
+        '<div style="flex:1"><label class="label">سعر الإيجار (اختياري)</label><input class="input" id="m_rentprice" type="number" min="0" value="'+esc(item.rentPrice)+'" placeholder="ج.م"/></div>' +
+        '<div style="flex:1"><label class="label">سعر البيع (اختياري)</label><input class="input" id="m_saleprice" type="number" min="0" value="'+esc(item.salePrice)+'" placeholder="ج.م"/></div>' +
+      '</div>' +
       '<div id="m_err" class="err" style="display:none"></div>' +
       '<button class="btn-primary" id="m_save">حفظ</button>' +
     '</div>';
@@ -1073,7 +1080,7 @@ function bindShellEvents(){
 
 function bindInventoryEvents(){
   const addBtn = document.getElementById("btnAddItem");
-  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"item", data:{ id:uid(), type:"", name:"", size:"", color:"", quantity:1, price:"", status:"available" } }));
+  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"item", data:{ id:uid(), type:"", name:"", size:"", color:"", quantity:1, rentPrice:"", salePrice:"", status:"available" } }));
 
   const search = document.getElementById("invSearch");
   if (search) search.addEventListener("input", () => { state.invQuery = search.value; refreshInventoryList(); });
@@ -1261,13 +1268,14 @@ function bindModalEvents(){
     const size = document.getElementById("m_size").value.trim();
     const color = document.getElementById("m_color").value.trim();
     const quantity = document.getElementById("m_qty").value;
-    const price = document.getElementById("m_price").value;
+    const rentPrice = document.getElementById("m_rentprice").value;
+    const salePrice = document.getElementById("m_saleprice").value;
     const status = document.getElementById("m_status").value;
     const errEl = document.getElementById("m_err");
     if (!type){ errEl.textContent = "اكتب نوع الصنف"; errEl.style.display = "block"; return; }
     if (quantity === "" || Number(quantity) < 0){ errEl.textContent = "حدد الكمية"; errEl.style.display = "block"; return; }
     mSave.disabled = true; mSave.textContent = "جاري الحفظ...";
-    const item = { id, type, name, size, color, quantity:Number(quantity), price, status, _ts: Date.now() };
+    const item = { id, type, name, size, color, quantity:Number(quantity), rentPrice, salePrice, status, _ts: Date.now() };
     try {
       const arr = await fsGetList("inventory");
       const idx = arr.findIndex(x => x.id === id);
