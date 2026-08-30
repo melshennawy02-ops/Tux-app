@@ -330,6 +330,18 @@ function supplierBalance(supplierName){
 }
 
 const EXPENSE_CATEGORIES = ["إيجار المحل","كهرباء ومياه","مرتبات","غسيل وكوي","صيانة","تسويق وإعلانات","أخرى"];
+const ARABIC_MONTHS = ["يناير","فبراير","مارس","أبريل","مايو","يونيو","يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"];
+function monthKeyOf(dateStr){ return dateStr ? dateStr.slice(0,7) : ""; }
+function monthLabelOf(key){
+  if (!key) return "بدون تاريخ";
+  const parts = key.split("-");
+  const y = parts[0], m = Number(parts[1]);
+  return (ARABIC_MONTHS[m-1] || key) + " " + y;
+}
+function todayStr(){
+  const d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+}
 
 /* =========================================================
    state
@@ -348,6 +360,7 @@ const state = {
   accountEntries:[], accountsLoaded:false, accountQuery:"", expandedAccount:null,
   expenses:[], expensesLoaded:false, expenseQuery:"",
   packages:[], packagesLoaded:false, packageQuery:"",
+  closedMonths:[], closedMonthsLoaded:false,
   modal:null, usersCache:[],
   online:true,
 };
@@ -508,11 +521,11 @@ function subscribeData(){
 }
 async function pollOnce(){
   try {
-    const [inv, cust, rent, sale, tailor, sup, acc, exp, pkg] = await Promise.all([
+    const [inv, cust, rent, sale, tailor, sup, acc, exp, pkg, closedM] = await Promise.all([
       fsGetList("inventory"), fsGetList("customers"),
       fsGetList("rentals"), fsGetList("sales"), fsGetList("tailor"),
       fsGetList("suppliers"), fsGetList("accounts"),
-      fsGetList("expenses"), fsGetList("packages")
+      fsGetList("expenses"), fsGetList("packages"), fsGetList("closedMonths")
     ]);
     inv.sort((a,b) => (b._ts||0) - (a._ts||0));
     cust.sort((a,b) => (b._ts||0) - (a._ts||0));
@@ -532,6 +545,7 @@ async function pollOnce(){
     state.accountEntries = acc;
     state.expenses = exp;
     state.packages = pkg;
+    state.closedMonths = closedM || [];
     state.invLoaded = true;
     state.custLoaded = true;
     state.rentalsLoaded = true;
@@ -541,6 +555,7 @@ async function pollOnce(){
     state.accountsLoaded = true;
     state.expensesLoaded = true;
     state.packagesLoaded = true;
+    state.closedMonthsLoaded = true;
     state.online = true;
     onDataChanged();
   } catch (e){
@@ -568,6 +583,7 @@ function onDataChanged(){
   if (state.view === "dashboard" && document.getElementById("mainContent")){
     document.getElementById("mainContent").innerHTML = renderDashboard();
     bindShellDashboardClicks();
+    bindDashboardEvents();
   }
 }
 
@@ -654,6 +670,54 @@ function renderComingSoon(current){
 /* =========================================================
    Dashboard
    ========================================================= */
+function greetingText(){
+  const h = new Date().getHours();
+  const name = state.username || "";
+  let g = "أهلاً بيك";
+  if (h < 5) g = "سهرانين لوقت متأخر";
+  else if (h < 12) g = "صباح الخير";
+  else if (h < 17) g = "مساء النور";
+  else g = "مساء الخير";
+  return g + (name ? " يا " + name : "");
+}
+
+function quickAdd(kind){
+  if (kind === "rental"){
+    state.view = "rental"; render();
+    openModal({ type:"rental", data:{ id:uid(), customerName:"", itemId:"", itemDesc:"", rentDate:todayStr(), dueDate:"", price:"", deposit:"", status:"active", notes:"", stockAdjusted:false } });
+  } else if (kind === "sale"){
+    state.view = "sales"; render();
+    openModal({ type:"sale", data:{ id:uid(), customerName:"", itemId:"", itemDesc:"", quantity:1, unitPrice:"", total:"", date:todayStr(), notes:"" } });
+  } else if (kind === "customer"){
+    state.view = "customers"; render();
+    openModal({ type:"customer", data:{ id:uid(), name:"", phone:"", measurements:"", notes:"" } });
+  } else if (kind === "item"){
+    state.view = "inventory"; render();
+    openModal({ type:"item", data:{ id:uid(), type:"", name:"", size:"", color:"", quantity:1, rentPrice:"", salePrice:"", status:"available" } });
+  }
+}
+function bindDashboardEvents(){
+  document.querySelectorAll("[data-quick]").forEach(btn => {
+    btn.addEventListener("click", () => quickAdd(btn.getAttribute("data-quick")));
+  });
+}
+
+function recentActivityHtml(){
+  const items = [];
+  state.rentals.slice(0,5).forEach(r => items.push({ ts:r._ts||0, icon:"shirt", color:"var(--amber)", text:"إيجار: "+(r.customerName||"—")+" — "+(r.itemDesc||""), amount:r.price }));
+  state.sales.slice(0,5).forEach(s => items.push({ ts:s._ts||0, icon:"bag", color:"var(--green)", text:"بيع: "+(s.customerName||"عميل مباشر")+" — "+(s.itemDesc||""), amount:s.total }));
+  items.sort((a,b) => b.ts - a.ts);
+  const top = items.slice(0,4);
+  if (top.length === 0) return '<div style="font-size:12.5px;color:var(--ink-soft);text-align:center;padding:10px">لسه مفيش نشاط، ابدأ بأول عملية</div>';
+  return top.map(function(it){
+    return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)">' +
+      '<div style="width:30px;height:30px;border-radius:8px;background:var(--cream);display:flex;align-items:center;justify-content:center;flex-shrink:0">'+icon(it.icon,14,it.color)+'</div>' +
+      '<div style="flex:1;min-width:0;font-size:12.5px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(it.text)+'</div>' +
+      (it.amount ? '<div style="font-size:12.5px;font-weight:700;color:var(--navy);flex-shrink:0">'+esc(it.amount)+' ج.م</div>' : '') +
+    '</div>';
+  }).join("");
+}
+
 function renderDashboard(){
   if (!state.invLoaded || !state.custLoaded){
     return pageHeader("dashboard","نظرة عامة","ملخص سريع لحالة المحل") +
@@ -664,30 +728,69 @@ function renderDashboard(){
   const available = state.inventory.reduce((sum,i) => sum + availableQtyOf(i), 0);
   const lowStock = state.inventory.filter(i => availableQtyOf(i) <= 2).length;
   const cards = [
-    { label:"إجمالي القطع", value:total, icon:"package", view:"inventory" },
+    { label:"إجمالي القطع", value:total, icon:"package", view:"inventory", color:"var(--navy)" },
     { label:"متاحة الآن", value:available, icon:"check", color:"var(--green)" },
     { label:"مؤجرة حالياً", value:rented, icon:"shirt", color:"var(--amber)" },
-    { label:"عدد العملاء", value:state.customers.length, icon:"users", view:"customers" },
+    { label:"عدد العملاء", value:state.customers.length, icon:"users", view:"customers", color:"#5B6FA6" },
   ];
   let cardsHtml = "";
   cards.forEach(c => {
-    cardsHtml += '<div class="card" style="cursor:'+(c.view?"pointer":"default")+'" '+(c.view?'data-view="'+c.view+'"':'')+'>' +
-      '<div style="margin-bottom:8px">'+icon(c.icon,18,c.color||"var(--navy)")+'</div>' +
+    cardsHtml += '<div class="card" style="cursor:'+(c.view?"pointer":"default")+';border-right:3px solid '+c.color+'" '+(c.view?'data-view="'+c.view+'"':'')+'>' +
+      '<div style="margin-bottom:8px">'+icon(c.icon,18,c.color)+'</div>' +
       '<div style="font-size:22px;font-weight:700;color:var(--navy)">'+c.value+'</div>' +
       '<div style="font-size:12.5px;color:var(--ink-soft);margin-top:2px">'+c.label+'</div></div>';
   });
+
+  const today = todayStr();
+  const thisMonth = monthKeyOf(today);
+  const salesToday = state.sales.filter(s => s.date === today).reduce((sum,s) => sum + (Number(s.total)||0), 0);
+  const rentalsToday = state.rentals.filter(r => r.rentDate === today).reduce((sum,r) => sum + (Number(r.price)||0), 0);
+  const salesMonth = state.sales.filter(s => monthKeyOf(s.date) === thisMonth).reduce((sum,s) => sum + (Number(s.total)||0), 0);
+  const rentalsMonth = state.rentals.filter(r => monthKeyOf(r.rentDate) === thisMonth).reduce((sum,r) => sum + (Number(r.price)||0), 0);
+  const expensesMonth = state.expenses.filter(x => monthKeyOf(x.date) === thisMonth).reduce((sum,x) => sum + (Number(x.amount)||0), 0);
+  const netMonth = salesMonth + rentalsMonth - expensesMonth;
   const totalOwedSuppliers = state.suppliers.reduce((sum,s) => { const b = supplierBalance(s.name); return sum + (b>0?b:0); }, 0);
-  return pageHeader("dashboard","نظرة عامة","ملخص سريع لحالة المحل") +
-    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px">'+cardsHtml+'</div>' +
-    (lowStock > 0 ? '<div class="card" style="background:var(--amber-bg);border-color:var(--gold);display:flex;align-items:center;gap:10px;margin-bottom:20px">'+
+
+  const quickActions = [
+    { kind:"rental", icon:"shirt", label:"إيجار جديد" },
+    { kind:"sale", icon:"bag", label:"بيع جديد" },
+    { kind:"customer", icon:"users", label:"عميل جديد" },
+    { kind:"item", icon:"package", label:"صنف جديد" },
+  ];
+  let quickHtml = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:20px">';
+  quickActions.forEach(q => {
+    quickHtml += '<button data-quick="'+q.kind+'" style="display:flex;flex-direction:column;align-items:center;gap:5px;padding:12px 4px;border-radius:12px;border:1px solid var(--line);background:var(--paper);cursor:pointer">' +
+      '<div style="width:32px;height:32px;border-radius:50%;background:var(--navy);display:flex;align-items:center;justify-content:center">'+icon(q.icon,15,"var(--gold)")+'</div>' +
+      '<span style="font-size:10.5px;color:var(--navy);font-weight:600">'+q.label+'</span>' +
+    '</button>';
+  });
+  quickHtml += '</div>';
+
+  return pageHeader("dashboard", greetingText(), "ملخص سريع لحالة "+(state.shopName||"المحل")) +
+    quickHtml +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px">'+cardsHtml+'</div>' +
+    (lowStock > 0 ? '<div class="card" style="background:var(--amber-bg);border-color:var(--gold);display:flex;align-items:center;gap:10px;margin-bottom:16px">'+
       icon("warn",17,"var(--amber)")+'<div style="font-size:13px;color:#6b4e0a">في '+lowStock+' صنف الكمية فيه وصلت 2 أو أقل — راجع المخزون</div></div>' : '') +
-    (totalOwedSuppliers > 0 ? '<div class="card" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;margin-bottom:20px" data-view="accounts">'+
-      '<div style="display:flex;align-items:center;gap:8px">'+icon("wallet",16,"var(--red)")+'<span style="font-size:13px;color:var(--ink)">إجمالي المستحق للموردين</span></div>'+
-      '<span style="font-weight:700;color:var(--red);font-size:14px">'+totalOwedSuppliers+' ج.م</span></div>' : '') +
-    '<div style="background:var(--navy);border-radius:14px;padding:20px">' +
-      '<div style="color:var(--gold-soft);font-weight:700;font-size:15px;margin-bottom:3px">متصل بالسحابة</div>' +
-      '<div style="color:rgba(255,255,255,0.6);font-size:12.5px">أي جهاز يفتح البرنامج بنفس بيانات المحل هيشوف نفس البيانات لحظياً</div>' +
-    '</div>';
+    '<div style="background:var(--navy);border-radius:14px;padding:16px 18px;margin-bottom:16px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">' +
+        '<span style="color:var(--gold-soft);font-weight:700;font-size:13.5px">إيرادات اليوم</span>' +
+        '<span style="color:#fff;font-weight:700;font-size:15px">'+(salesToday+rentalsToday)+' ج.م</span>' +
+      '</div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.12)">' +
+        '<span style="color:rgba(255,255,255,0.7);font-size:12.5px">صافي الربح التقديري هذا الشهر</span>' +
+        '<span style="color:'+(netMonth>=0?"#7CD992":"#F0A0A0")+';font-weight:700;font-size:14px">'+netMonth+' ج.م</span>' +
+      '</div>' +
+      (totalOwedSuppliers > 0 ? '<div style="display:flex;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid rgba(255,255,255,0.12);cursor:pointer" data-view="accounts">'+
+        '<span style="color:rgba(255,255,255,0.7);font-size:12.5px">إجمالي المستحق للموردين</span>'+
+        '<span style="color:#F0A0A0;font-weight:700;font-size:14px">'+totalOwedSuppliers+' ج.م</span></div>' : '') +
+    '</div>' +
+    '<div class="card" style="margin-bottom:14px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+        '<span style="font-weight:700;color:var(--navy);font-size:13.5px">آخر نشاط</span>' +
+      '</div>' +
+      recentActivityHtml() +
+    '</div>' +
+    '<div style="text-align:center;font-size:10.5px;color:var(--ink-soft)">'+icon("cloud",11,"var(--green)")+' متصل بالسحابة — بياناتك متزامنة على أي جهاز</div>';
 }
 
 /* =========================================================
@@ -1076,34 +1179,65 @@ function filteredExpenses(){
   const q = state.expenseQuery.toLowerCase();
   return state.expenses.filter(x => !q || (x.category||"").toLowerCase().includes(q) || (x.notes||"").toLowerCase().includes(q));
 }
-function expensesListHtml(){
+function expenseMonthGroups(){
   const list = filteredExpenses();
+  const groups = {};
+  list.forEach(x => {
+    const key = monthKeyOf(x.date);
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(x);
+  });
+  const keys = Object.keys(groups).sort().reverse();
+  return keys.map(k => ({ key:k, label:monthLabelOf(k), items:groups[k], closed: state.closedMonths.indexOf(k) !== -1 }));
+}
+function expensesListHtml(){
   if (!state.expensesLoaded){
     return '<div class="empty">'+icon("cloud",30,"var(--line)")+'<div style="margin-top:10px;font-size:14px">جاري التحميل من السحابة...</div></div>';
   }
-  if (list.length === 0){
+  const groups = expenseMonthGroups();
+  if (groups.length === 0){
     return '<div class="empty">'+icon("receipt",34,"var(--line)")+'<div style="margin-top:10px;font-size:14px">'+
       (state.expenses.length===0 ? "لسه مفيش مصروفات مسجلة — ابدأ بإضافة أول مصروف" : "مفيش نتائج مطابقة")+'</div></div>';
   }
-  return '<div style="display:flex;flex-direction:column;gap:10px">' + list.map(x => {
-    return '<div class="card row">' +
-      '<div style="width:38px;height:38px;border-radius:10px;background:var(--cream);display:flex;align-items:center;justify-content:center;flex-shrink:0">'+icon("receipt",17,"var(--navy)")+'</div>' +
-      '<div style="flex:1;min-width:0">' +
-        '<div style="font-weight:600;color:var(--navy);font-size:14.5px">'+esc(x.category||"—")+'</div>' +
-        '<div style="font-size:12px;color:var(--ink-soft);margin-top:2px">'+(x.date?esc(x.date):"")+(x.notes?' · '+esc(x.notes):'')+'</div>' +
+  return groups.map(g => {
+    const subtotal = g.items.reduce((sum,x) => sum + (Number(x.amount)||0), 0);
+    const header = '<div style="display:flex;align-items:center;justify-content:space-between;margin:4px 2px 10px">' +
+      '<div style="display:flex;align-items:center;gap:8px">' +
+        '<span style="font-weight:700;color:var(--navy);font-size:14px">'+esc(g.label)+'</span>' +
+        (g.closed ? '<span class="badge" style="background:var(--green-bg);color:var(--green)">مقفول</span>' : '<span class="badge" style="background:var(--amber-bg);color:var(--amber)">مفتوح</span>') +
       '</div>' +
-      '<div style="font-weight:700;color:var(--red);font-size:14.5px;flex-shrink:0">'+esc(x.amount)+' ج.م</div>' +
-      '<div style="display:flex;gap:6px;flex-shrink:0">' +
-        '<button class="btn-icon" data-edit-expense="'+x.id+'">'+icon("pencil",15,"var(--navy)")+'</button>' +
-        '<button class="btn-icon" data-del-expense="'+x.id+'">'+icon("trash",15,"var(--red)")+'</button>' +
-      '</div></div>';
-  }).join("") + '</div>';
+      '<div style="display:flex;align-items:center;gap:10px">' +
+        '<span style="font-size:13px;font-weight:700;color:var(--red)">'+subtotal+' ج.م</span>' +
+        (g.key ? (g.closed ?
+          '<button data-reopen-month="'+esc(g.key)+'" style="font-size:11px;color:var(--ink-soft);background:none;border:none;text-decoration:underline;cursor:pointer">فتح تاني</button>' :
+          '<button data-close-month="'+esc(g.key)+'" style="font-size:11px;color:var(--navy);background:var(--cream);border:1px solid var(--line);border-radius:20px;padding:4px 10px;cursor:pointer">'+icon("check",11)+' قفل الشهر</button>'
+        ) : '') +
+      '</div>' +
+    '</div>';
+    const cards = g.items.map(x => {
+      const editButtons = g.closed ? '' :
+        '<div style="display:flex;gap:6px;flex-shrink:0">' +
+          '<button class="btn-icon" data-edit-expense="'+x.id+'">'+icon("pencil",15,"var(--navy)")+'</button>' +
+          '<button class="btn-icon" data-del-expense="'+x.id+'">'+icon("trash",15,"var(--red)")+'</button>' +
+        '</div>';
+      return '<div class="card row" style="'+(g.closed?"opacity:0.75":"")+'">' +
+        '<div style="width:38px;height:38px;border-radius:10px;background:var(--cream);display:flex;align-items:center;justify-content:center;flex-shrink:0">'+icon("receipt",17,"var(--navy)")+'</div>' +
+        '<div style="flex:1;min-width:0">' +
+          '<div style="font-weight:600;color:var(--navy);font-size:14.5px">'+esc(x.category||"—")+'</div>' +
+          '<div style="font-size:12px;color:var(--ink-soft);margin-top:2px">'+(x.date?esc(x.date):"")+(x.notes?' · '+esc(x.notes):'')+'</div>' +
+        '</div>' +
+        '<div style="font-weight:700;color:var(--red);font-size:14.5px;flex-shrink:0">'+esc(x.amount)+' ج.م</div>' +
+        editButtons +
+      '</div>';
+    }).join("");
+    return '<div style="margin-bottom:20px">' + header + '<div style="display:flex;flex-direction:column;gap:10px">' + cards + '</div></div>';
+  }).join("");
 }
 function renderExpenses(){
   const total = state.expenses.reduce((sum,x) => sum + (Number(x.amount)||0), 0);
   return pageHeader("receipt","المصروفات", state.expenses.length+" مصروف مسجل",
       '<button class="btn-add" id="btnAddExpense">'+icon("plus",16)+' مصروف جديد</button>') +
-    (state.expenses.length>0 ? '<div class="card" style="background:var(--navy);border:none;margin-bottom:16px"><div style="color:var(--gold-soft);font-size:13px">إجمالي المصروفات</div><div style="color:#fff;font-size:22px;font-weight:700;margin-top:2px">'+total+' ج.م</div></div>' : '') +
+    (state.expenses.length>0 ? '<div class="card" style="background:var(--navy);border:none;margin-bottom:16px"><div style="color:var(--gold-soft);font-size:13px">إجمالي المصروفات (كل الشهور)</div><div style="color:#fff;font-size:22px;font-weight:700;margin-top:2px">'+total+' ج.م</div></div>' : '') +
     '<div style="position:relative;margin-bottom:16px">' +
       '<span style="position:absolute;right:12px;top:12px">'+icon("search",15,"var(--ink-soft)")+'</span>' +
       '<input class="input" style="padding-right:36px" id="expenseSearch" placeholder="ابحث بنوع المصروف أو ملاحظة" value="'+esc(state.expenseQuery)+'"/></div>' +
@@ -1239,15 +1373,43 @@ function renderReports(){
       '</div>';
     }).join("");
 
+  // monthly report: revenue vs expenses per calendar month
+  const monthKeys = new Set();
+  state.sales.forEach(s => { if (s.date) monthKeys.add(monthKeyOf(s.date)); });
+  state.rentals.forEach(r => { if (r.rentDate) monthKeys.add(monthKeyOf(r.rentDate)); });
+  state.expenses.forEach(x => { if (x.date) monthKeys.add(monthKeyOf(x.date)); });
+  const sortedMonths = Array.from(monthKeys).sort().reverse();
+  const monthlyHtml = sortedMonths.length === 0 ? '<div style="font-size:12.5px;color:var(--ink-soft)">لسه مفيش عمليات مؤرخة كفاية</div>' :
+    sortedMonths.map(function(mKey){
+      const salesRev = state.sales.filter(s => monthKeyOf(s.date)===mKey).reduce((sum,s) => sum+(Number(s.total)||0),0);
+      const rentRev = state.rentals.filter(r => monthKeyOf(r.rentDate)===mKey).reduce((sum,r) => sum+(Number(r.price)||0),0);
+      const exp = state.expenses.filter(x => monthKeyOf(x.date)===mKey).reduce((sum,x) => sum+(Number(x.amount)||0),0);
+      const net = salesRev + rentRev - exp;
+      const closed = state.closedMonths.indexOf(mKey) !== -1;
+      return '<div style="padding:12px 0;border-bottom:1px solid var(--line)">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+          '<span style="font-weight:700;color:var(--navy);font-size:13.5px">'+esc(monthLabelOf(mKey))+'</span>' +
+          (closed ? '<span class="badge" style="background:var(--green-bg);color:var(--green)">مقفول</span>' : '<span class="badge" style="background:var(--amber-bg);color:var(--amber)">مفتوح</span>') +
+        '</div>' +
+        '<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--ink-soft);margin-bottom:2px"><span>إيرادات</span><span>'+(salesRev+rentRev)+' ج.م</span></div>' +
+        '<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--ink-soft);margin-bottom:4px"><span>مصروفات</span><span>'+exp+' ج.م</span></div>' +
+        '<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700"><span style="color:var(--navy)">صافي الشهر</span><span style="color:'+(net>=0?"var(--green)":"var(--red)")+'">'+net+' ج.م</span></div>' +
+      '</div>';
+    }).join("");
+
   return pageHeader("report","التقارير","ملخص شامل لنشاط المحل") +
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px">'+statsHtml+'</div>' +
     '<div class="card" style="margin-bottom:16px">' +
       '<div style="font-weight:700;color:var(--navy);font-size:14px;margin-bottom:10px">أكتر الأصناف تأجيراً</div>' +
       topRentedHtml +
     '</div>' +
-    '<div class="card">' +
+    '<div class="card" style="margin-bottom:16px">' +
       '<div style="font-weight:700;color:var(--navy);font-size:14px;margin-bottom:10px">أصناف محتاجة تجديد مخزون</div>' +
       lowStockHtml +
+    '</div>' +
+    '<div class="card">' +
+      '<div style="font-weight:700;color:var(--navy);font-size:14px;margin-bottom:10px">التقرير الشهري</div>' +
+      monthlyHtml +
     '</div>';
 }
 
@@ -1615,6 +1777,7 @@ function bindShellEvents(){
   if (state.view === "accounts") bindAccountsEvents();
   if (state.view === "expenses") bindExpensesEvents();
   if (state.view === "packages") bindPackagesEvents();
+  if (state.view === "dashboard") bindDashboardEvents();
 }
 
 function bindInventoryEvents(){
@@ -1690,7 +1853,7 @@ function bindCustomersListEvents(){
 
 function bindRentalEvents(){
   const addBtn = document.getElementById("btnAddRental");
-  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"rental", data:{ id:uid(), customerName:"", itemId:"", itemDesc:"", rentDate:"", dueDate:"", price:"", deposit:"", status:"active", notes:"", stockAdjusted:false } }));
+  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"rental", data:{ id:uid(), customerName:"", itemId:"", itemDesc:"", rentDate:todayStr(), dueDate:"", price:"", deposit:"", status:"active", notes:"", stockAdjusted:false } }));
   const search = document.getElementById("rentalSearch");
   if (search) search.addEventListener("input", () => { state.rentalQuery = search.value; refreshRentalList(); });
   bindRentalListEvents();
@@ -1726,7 +1889,7 @@ function bindRentalListEvents(){
 
 function bindSalesEvents(){
   const addBtn = document.getElementById("btnAddSale");
-  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"sale", data:{ id:uid(), customerName:"", itemId:"", itemDesc:"", quantity:1, unitPrice:"", total:"", date:"", notes:"" } }));
+  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"sale", data:{ id:uid(), customerName:"", itemId:"", itemDesc:"", quantity:1, unitPrice:"", total:"", date:todayStr(), notes:"" } }));
   const search = document.getElementById("salesSearch");
   if (search) search.addEventListener("input", () => { state.salesQuery = search.value; refreshSalesList(); });
   bindSalesListEvents();
@@ -1866,7 +2029,7 @@ function bindAccountsListEvents(){
 
 function bindExpensesEvents(){
   const addBtn = document.getElementById("btnAddExpense");
-  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"expense", data:{ id:uid(), category:EXPENSE_CATEGORIES[0], amount:"", date:"", notes:"" } }));
+  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"expense", data:{ id:uid(), category:EXPENSE_CATEGORIES[0], amount:"", date:todayStr(), notes:"" } }));
   const search = document.getElementById("expenseSearch");
   if (search) search.addEventListener("input", () => { state.expenseQuery = search.value; refreshExpensesList(); });
   bindExpensesListEvents();
@@ -1876,6 +2039,15 @@ function refreshExpensesList(){
   if (!host) return;
   host.innerHTML = expensesListHtml();
   bindExpensesListEvents();
+}
+async function setMonthClosed(monthKey, closed){
+  try {
+    const arr = await fsGetList("closedMonths");
+    const set = new Set(arr);
+    if (closed) set.add(monthKey); else set.delete(monthKey);
+    await fsSaveList("closedMonths", Array.from(set));
+    pollOnce();
+  } catch(e){}
 }
 function bindExpensesListEvents(){
   document.querySelectorAll("[data-edit-expense]").forEach(btn => {
@@ -1889,6 +2061,12 @@ function bindExpensesListEvents(){
     btn.addEventListener("click", () => {
       openModal({ type:"confirmDeleteExpense", id: btn.getAttribute("data-del-expense") });
     });
+  });
+  document.querySelectorAll("[data-close-month]").forEach(btn => {
+    btn.addEventListener("click", () => setMonthClosed(btn.getAttribute("data-close-month"), true));
+  });
+  document.querySelectorAll("[data-reopen-month]").forEach(btn => {
+    btn.addEventListener("click", () => setMonthClosed(btn.getAttribute("data-reopen-month"), false));
   });
 }
 
@@ -2402,6 +2580,7 @@ function bindModalEvents(){
     const notes = document.getElementById("m_expnotes").value.trim();
     const errEl = document.getElementById("m_experr");
     if (!amount || Number(amount) <= 0){ errEl.textContent = "حدد المبلغ"; errEl.style.display = "block"; return; }
+    if (state.closedMonths.indexOf(monthKeyOf(date)) !== -1){ errEl.textContent = "الشهر ده مقفول، افتحه تاني الأول لو عايز تعدّل فيه"; errEl.style.display = "block"; return; }
     mExpSave.disabled = true; mExpSave.textContent = "جاري الحفظ...";
     const x = { id, category, amount, date, notes, _ts: Date.now() };
     try {
