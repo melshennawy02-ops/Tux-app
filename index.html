@@ -242,15 +242,15 @@ function tapeRule(color){
    ========================================================= */
 const MODULES = [
   { key:"dashboard", label:"الرئيسية", icon:"dashboard", ready:true },
-  { key:"rental", label:"الإيجار", icon:"shirt", ready:false },
-  { key:"sales", label:"المبيعات", icon:"bag", ready:false },
+  { key:"rental", label:"الإيجار", icon:"shirt", ready:true },
+  { key:"sales", label:"المبيعات", icon:"bag", ready:true },
   { key:"inventory", label:"المخزون", icon:"package", ready:true },
   { key:"customers", label:"العملاء", icon:"users", ready:true },
   { key:"suppliers", label:"الموردين", icon:"truck", ready:false },
   { key:"accounts", label:"الحسابات", icon:"wallet", ready:false },
   { key:"expenses", label:"المصروفات", icon:"receipt", ready:false },
   { key:"profits", label:"الأرباح", icon:"trending", ready:false },
-  { key:"tailor", label:"الترزي", icon:"scissors", ready:false },
+  { key:"tailor", label:"الترزي", icon:"scissors", ready:true },
   { key:"packages", label:"الباقات", icon:"gift", ready:false },
   { key:"reports", label:"التقارير", icon:"report", ready:false },
 ];
@@ -263,6 +263,20 @@ const STATUS_OPTIONS = [
 ];
 function statusOf(v){ return STATUS_OPTIONS.find(s => s.value === v) || STATUS_OPTIONS[0]; }
 
+const RENTAL_STATUS = [
+  { value:"active", label:"مؤجرة", color:"var(--amber)", bg:"var(--amber-bg)" },
+  { value:"returned", label:"تم الإرجاع", color:"var(--green)", bg:"var(--green-bg)" },
+  { value:"late", label:"متأخرة", color:"var(--red)", bg:"var(--red-bg)" },
+];
+function rentalStatusOf(v){ return RENTAL_STATUS.find(s => s.value === v) || RENTAL_STATUS[0]; }
+
+const TAILOR_STATUS = [
+  { value:"pending", label:"قيد التنفيذ", color:"var(--amber)", bg:"var(--amber-bg)" },
+  { value:"ready", label:"جاهزة", color:"#5B6FA6", bg:"#EBEEFA" },
+  { value:"delivered", label:"تم التسليم", color:"var(--green)", bg:"var(--green-bg)" },
+];
+function tailorStatusOf(v){ return TAILOR_STATUS.find(s => s.value === v) || TAILOR_STATUS[0]; }
+
 /* =========================================================
    state
    ========================================================= */
@@ -273,6 +287,9 @@ const state = {
   inventory:[], customers:[], invLoaded:false, custLoaded:false,
   invQuery:"", invType:"الكل",
   custQuery:"", expandedCustomer:null,
+  rentals:[], rentalsLoaded:false, rentalQuery:"", expandedRental:null,
+  sales:[], salesLoaded:false, salesQuery:"",
+  tailorOrders:[], tailorLoaded:false, tailorQuery:"", expandedTailor:null,
   modal:null, usersCache:[],
   online:true,
 };
@@ -433,13 +450,25 @@ function subscribeData(){
 }
 async function pollOnce(){
   try {
-    const [inv, cust] = await Promise.all([fsGetList("inventory"), fsGetList("customers")]);
+    const [inv, cust, rent, sale, tailor] = await Promise.all([
+      fsGetList("inventory"), fsGetList("customers"),
+      fsGetList("rentals"), fsGetList("sales"), fsGetList("tailor")
+    ]);
     inv.sort((a,b) => (b._ts||0) - (a._ts||0));
     cust.sort((a,b) => (b._ts||0) - (a._ts||0));
+    rent.sort((a,b) => (b._ts||0) - (a._ts||0));
+    sale.sort((a,b) => (b._ts||0) - (a._ts||0));
+    tailor.sort((a,b) => (b._ts||0) - (a._ts||0));
     state.inventory = inv;
     state.customers = cust;
+    state.rentals = rent;
+    state.sales = sale;
+    state.tailorOrders = tailor;
     state.invLoaded = true;
     state.custLoaded = true;
+    state.rentalsLoaded = true;
+    state.salesLoaded = true;
+    state.tailorLoaded = true;
     state.online = true;
     onDataChanged();
   } catch (e){
@@ -453,6 +482,9 @@ function onDataChanged(){
   if (!state.authed) return;
   if (state.view === "inventory" && document.getElementById("invList")) refreshInventoryList();
   if (state.view === "customers" && document.getElementById("custList")) refreshCustomersList();
+  if (state.view === "rental" && document.getElementById("rentalList")) refreshRentalList();
+  if (state.view === "sales" && document.getElementById("salesList")) refreshSalesList();
+  if (state.view === "tailor" && document.getElementById("tailorList")) refreshTailorList();
   if (state.view === "dashboard" && document.getElementById("mainContent")){
     document.getElementById("mainContent").innerHTML = renderDashboard();
     bindShellDashboardClicks();
@@ -518,6 +550,9 @@ function renderMainContent(current){
   if (state.view === "dashboard") return renderDashboard();
   if (state.view === "inventory") return renderInventory();
   if (state.view === "customers") return renderCustomers();
+  if (state.view === "rental") return renderRental();
+  if (state.view === "sales") return renderSales();
+  if (state.view === "tailor") return renderTailor();
   return renderComingSoon(current);
 }
 
@@ -676,6 +711,152 @@ function renderCustomers(){
 }
 
 /* =========================================================
+   Rental (الإيجار)
+   ========================================================= */
+function filteredRentals(){
+  const q = state.rentalQuery.toLowerCase();
+  return state.rentals.filter(r => !q || (r.customerName||"").toLowerCase().includes(q) || (r.itemDesc||"").toLowerCase().includes(q));
+}
+function rentalListHtml(){
+  const list = filteredRentals();
+  if (!state.rentalsLoaded){
+    return '<div class="empty">'+icon("cloud",30,"var(--line)")+'<div style="margin-top:10px;font-size:14px">جاري التحميل من السحابة...</div></div>';
+  }
+  if (list.length === 0){
+    return '<div class="empty">'+icon("shirt",34,"var(--line)")+'<div style="margin-top:10px;font-size:14px">'+
+      (state.rentals.length===0 ? "لسه مفيش عمليات إيجار — ابدأ بإضافة أول عملية" : "مفيش نتائج مطابقة")+'</div></div>';
+  }
+  return '<div style="display:flex;flex-direction:column;gap:10px">' + list.map(r => {
+    const st = rentalStatusOf(r.status);
+    const isOpen = state.expandedRental === r.id;
+    const extra = (isOpen && (r.deposit || r.notes)) ? (
+      '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">' +
+      (r.deposit ? '<div style="font-size:13px;color:var(--ink);margin-bottom:6px">التأمين: '+esc(r.deposit)+' ج.م</div>' : '') +
+      (r.notes ? '<div style="font-size:13px;color:var(--ink-soft)">'+esc(r.notes)+'</div>' : '') +
+      '</div>') : '';
+    return '<div class="card">' +
+      '<div class="row" style="cursor:pointer;align-items:flex-start" data-toggle-rental="'+r.id+'">' +
+        '<div style="width:38px;height:38px;border-radius:10px;background:var(--cream);display:flex;align-items:center;justify-content:center;flex-shrink:0">'+icon("shirt",17,"var(--navy)")+'</div>' +
+        '<div style="flex:1;min-width:0">' +
+          '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+            '<span style="font-weight:600;color:var(--navy);font-size:14.5px">'+esc(r.customerName||"بدون اسم")+'</span>' +
+            '<span class="badge" style="background:'+st.bg+';color:'+st.color+'">'+st.label+'</span>' +
+          '</div>' +
+          '<div style="font-size:12.5px;color:var(--ink-soft);margin-top:3px">'+esc(r.itemDesc||"—")+'</div>' +
+          '<div style="font-size:12px;color:var(--ink-soft);margin-top:2px">من '+esc(r.rentDate||"—")+' لحد '+esc(r.dueDate||"—")+(r.price?' · '+esc(r.price)+' ج.م':'')+'</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:6px" data-stop="1">' +
+          '<button class="btn-icon" data-edit-rental="'+r.id+'">'+icon("pencil",15,"var(--navy)")+'</button>' +
+          '<button class="btn-icon" data-del-rental="'+r.id+'">'+icon("trash",15,"var(--red)")+'</button>' +
+        '</div>' +
+      '</div>' + extra +
+    '</div>';
+  }).join("") + '</div>';
+}
+function renderRental(){
+  return pageHeader("shirt","الإيجار", state.rentals.length+" عملية مسجلة",
+      '<button class="btn-add" id="btnAddRental">'+icon("plus",16)+' إيجار جديد</button>') +
+    '<div style="position:relative;margin-bottom:16px">' +
+      '<span style="position:absolute;right:12px;top:12px">'+icon("search",15,"var(--ink-soft)")+'</span>' +
+      '<input class="input" style="padding-right:36px" id="rentalSearch" placeholder="ابحث باسم العميل أو الصنف" value="'+esc(state.rentalQuery)+'"/></div>' +
+    '<div id="rentalList">' + rentalListHtml() + '</div>';
+}
+
+/* =========================================================
+   Sales (المبيعات)
+   ========================================================= */
+function filteredSales(){
+  const q = state.salesQuery.toLowerCase();
+  return state.sales.filter(s => !q || (s.customerName||"").toLowerCase().includes(q) || (s.itemDesc||"").toLowerCase().includes(q));
+}
+function salesListHtml(){
+  const list = filteredSales();
+  if (!state.salesLoaded){
+    return '<div class="empty">'+icon("cloud",30,"var(--line)")+'<div style="margin-top:10px;font-size:14px">جاري التحميل من السحابة...</div></div>';
+  }
+  if (list.length === 0){
+    return '<div class="empty">'+icon("bag",34,"var(--line)")+'<div style="margin-top:10px;font-size:14px">'+
+      (state.sales.length===0 ? "لسه مفيش عمليات بيع — ابدأ بإضافة أول عملية" : "مفيش نتائج مطابقة")+'</div></div>';
+  }
+  return '<div style="display:flex;flex-direction:column;gap:10px">' + list.map(s => {
+    return '<div class="card row">' +
+      '<div style="width:38px;height:38px;border-radius:10px;background:var(--cream);display:flex;align-items:center;justify-content:center;flex-shrink:0">'+icon("bag",17,"var(--navy)")+'</div>' +
+      '<div style="flex:1;min-width:0">' +
+        '<div style="font-weight:600;color:var(--navy);font-size:14.5px">'+esc(s.customerName||"عميل مباشر")+'</div>' +
+        '<div style="font-size:12.5px;color:var(--ink-soft);margin-top:3px">'+esc(s.itemDesc||"—")+' × '+esc(s.quantity||1)+(s.date?' · '+esc(s.date):'')+'</div>' +
+      '</div>' +
+      '<div style="text-align:left;flex-shrink:0">' +
+        '<div style="font-weight:700;color:var(--navy);font-size:15px">'+esc(s.total||0)+' ج.م</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:6px;flex-shrink:0">' +
+        '<button class="btn-icon" data-edit-sale="'+s.id+'">'+icon("pencil",15,"var(--navy)")+'</button>' +
+        '<button class="btn-icon" data-del-sale="'+s.id+'">'+icon("trash",15,"var(--red)")+'</button>' +
+      '</div></div>';
+  }).join("") + '</div>';
+}
+function renderSales(){
+  const totalRevenue = state.sales.reduce((sum,s) => sum + (Number(s.total)||0), 0);
+  return pageHeader("bag","المبيعات", state.sales.length+" عملية بيع",
+      '<button class="btn-add" id="btnAddSale">'+icon("plus",16)+' بيع جديد</button>') +
+    (state.sales.length>0 ? '<div class="card" style="background:var(--navy);border:none;margin-bottom:16px"><div style="color:var(--gold-soft);font-size:13px">إجمالي المبيعات</div><div style="color:#fff;font-size:22px;font-weight:700;margin-top:2px">'+totalRevenue+' ج.م</div></div>' : '') +
+    '<div style="position:relative;margin-bottom:16px">' +
+      '<span style="position:absolute;right:12px;top:12px">'+icon("search",15,"var(--ink-soft)")+'</span>' +
+      '<input class="input" style="padding-right:36px" id="salesSearch" placeholder="ابحث باسم العميل أو الصنف" value="'+esc(state.salesQuery)+'"/></div>' +
+    '<div id="salesList">' + salesListHtml() + '</div>';
+}
+
+/* =========================================================
+   Tailor (الترزي)
+   ========================================================= */
+function filteredTailor(){
+  const q = state.tailorQuery.toLowerCase();
+  return state.tailorOrders.filter(t => !q || (t.customerName||"").toLowerCase().includes(q) || (t.itemDesc||"").toLowerCase().includes(q));
+}
+function tailorListHtml(){
+  const list = filteredTailor();
+  if (!state.tailorLoaded){
+    return '<div class="empty">'+icon("cloud",30,"var(--line)")+'<div style="margin-top:10px;font-size:14px">جاري التحميل من السحابة...</div></div>';
+  }
+  if (list.length === 0){
+    return '<div class="empty">'+icon("scissors",34,"var(--line)")+'<div style="margin-top:10px;font-size:14px">'+
+      (state.tailorOrders.length===0 ? "لسه مفيش طلبات تعديل — ابدأ بإضافة أول طلب" : "مفيش نتائج مطابقة")+'</div></div>';
+  }
+  return '<div style="display:flex;flex-direction:column;gap:10px">' + list.map(t => {
+    const st = tailorStatusOf(t.status);
+    const isOpen = state.expandedTailor === t.id;
+    const extra = (isOpen && (t.notes || t.tailorName)) ? (
+      '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">' +
+      (t.tailorName ? '<div style="font-size:13px;color:var(--ink);margin-bottom:6px">الترزي المسؤول: '+esc(t.tailorName)+'</div>' : '') +
+      (t.notes ? '<div style="font-size:13px;color:var(--ink-soft)">'+esc(t.notes)+'</div>' : '') +
+      '</div>') : '';
+    return '<div class="card">' +
+      '<div class="row" style="cursor:pointer;align-items:flex-start" data-toggle-tailor="'+t.id+'">' +
+        '<div style="width:38px;height:38px;border-radius:10px;background:var(--cream);display:flex;align-items:center;justify-content:center;flex-shrink:0">'+icon("scissors",17,"var(--navy)")+'</div>' +
+        '<div style="flex:1;min-width:0">' +
+          '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+            '<span style="font-weight:600;color:var(--navy);font-size:14.5px">'+esc(t.customerName||"بدون اسم")+'</span>' +
+            '<span class="badge" style="background:'+st.bg+';color:'+st.color+'">'+st.label+'</span>' +
+          '</div>' +
+          '<div style="font-size:12.5px;color:var(--ink-soft);margin-top:3px">'+esc(t.itemDesc||"—")+(t.dueDate?' · التسليم: '+esc(t.dueDate):'')+(t.cost?' · '+esc(t.cost)+' ج.م':'')+'</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:6px" data-stop="1">' +
+          '<button class="btn-icon" data-edit-tailor="'+t.id+'">'+icon("pencil",15,"var(--navy)")+'</button>' +
+          '<button class="btn-icon" data-del-tailor="'+t.id+'">'+icon("trash",15,"var(--red)")+'</button>' +
+        '</div>' +
+      '</div>' + extra +
+    '</div>';
+  }).join("") + '</div>';
+}
+function renderTailor(){
+  return pageHeader("scissors","الترزي", state.tailorOrders.length+" طلب مسجل",
+      '<button class="btn-add" id="btnAddTailor">'+icon("plus",16)+' طلب تعديل جديد</button>') +
+    '<div style="position:relative;margin-bottom:16px">' +
+      '<span style="position:absolute;right:12px;top:12px">'+icon("search",15,"var(--ink-soft)")+'</span>' +
+      '<input class="input" style="padding-right:36px" id="tailorSearch" placeholder="ابحث باسم العميل أو الصنف" value="'+esc(state.tailorQuery)+'"/></div>' +
+    '<div id="tailorList">' + tailorListHtml() + '</div>';
+}
+
+/* =========================================================
    Modal shell
    ========================================================= */
 function openModal(modal){ state.modal = modal; renderModalInto(); }
@@ -712,9 +893,15 @@ function renderModalInto(){
 
   if (m.type === "item") host.innerHTML = renderItemModal(m.data);
   else if (m.type === "customer") host.innerHTML = renderCustomerModal(m.data);
+  else if (m.type === "rental") host.innerHTML = renderRentalModal(m.data);
+  else if (m.type === "sale") host.innerHTML = renderSaleModal(m.data);
+  else if (m.type === "tailor") host.innerHTML = renderTailorModal(m.data);
   else if (m.type === "users") host.innerHTML = renderUsersModal();
   else if (m.type === "confirmDeleteItem") host.innerHTML = confirmHtml("هل تريد حذف هذا الصنف من المخزون؟");
   else if (m.type === "confirmDeleteCust") host.innerHTML = confirmHtml("هل تريد حذف بيانات هذا العميل؟");
+  else if (m.type === "confirmDeleteRental") host.innerHTML = confirmHtml("هل تريد حذف عملية الإيجار دي؟");
+  else if (m.type === "confirmDeleteSale") host.innerHTML = confirmHtml("هل تريد حذف عملية البيع دي؟");
+  else if (m.type === "confirmDeleteTailor") host.innerHTML = confirmHtml("هل تريد حذف طلب الترزي ده؟");
   else if (m.type === "confirmDeleteUser") host.innerHTML = confirmHtml("هل تريد حذف هذا المستخدم؟");
 
   bindModalEvents();
@@ -754,6 +941,67 @@ function renderCustomerModal(c){
       '<button class="btn-primary" id="m_csave">حفظ</button>' +
     '</div>';
   return modalShellHtml(c.name ? "تعديل بيانات العميل" : "إضافة عميل جديد", body) + '<input type="hidden" id="m_cid" value="'+c.id+'"/>';
+}
+
+/* ---- rental modal ---- */
+function renderRentalModal(r){
+  let statusOpts = RENTAL_STATUS.map(s => '<option value="'+s.value+'"'+(r.status===s.value?" selected":"")+'>'+s.label+'</option>').join("");
+  const body = '' +
+    '<div style="display:flex;flex-direction:column;gap:12px">' +
+      '<div><label class="label">اسم العميل</label><input class="input" id="m_rcust" value="'+esc(r.customerName)+'" placeholder="اسم العميل"/></div>' +
+      '<div><label class="label">وصف الصنف المؤجر</label><input class="input" id="m_ritem" value="'+esc(r.itemDesc)+'" placeholder="مثال: بدلة كحلي مقاس 50"/></div>' +
+      '<div style="display:flex;gap:10px">' +
+        '<div style="flex:1"><label class="label">تاريخ الإيجار</label><input class="input" id="m_rrentdate" type="date" value="'+esc(r.rentDate)+'"/></div>' +
+        '<div style="flex:1"><label class="label">تاريخ الإرجاع المتوقع</label><input class="input" id="m_rduedate" type="date" value="'+esc(r.dueDate)+'"/></div>' +
+      '</div>' +
+      '<div style="display:flex;gap:10px">' +
+        '<div style="flex:1"><label class="label">سعر الإيجار</label><input class="input" id="m_rprice" type="number" min="0" value="'+esc(r.price)+'" placeholder="ج.م"/></div>' +
+        '<div style="flex:1"><label class="label">التأمين (اختياري)</label><input class="input" id="m_rdeposit" type="number" min="0" value="'+esc(r.deposit)+'" placeholder="ج.م"/></div>' +
+      '</div>' +
+      '<div><label class="label">الحالة</label><select class="input" id="m_rstatus">'+statusOpts+'</select></div>' +
+      '<div><label class="label">ملاحظات</label><textarea class="input" id="m_rnotes" style="min-height:56px;resize:vertical" placeholder="أي ملاحظات إضافية">'+esc(r.notes)+'</textarea></div>' +
+      '<div id="m_rerr" class="err" style="display:none"></div>' +
+      '<button class="btn-primary" id="m_rsave">حفظ</button>' +
+    '</div>';
+  return modalShellHtml(r.customerName ? "تعديل عملية الإيجار" : "إيجار جديد", body) + '<input type="hidden" id="m_rid" value="'+r.id+'"/>';
+}
+
+/* ---- sale modal ---- */
+function renderSaleModal(s){
+  const body = '' +
+    '<div style="display:flex;flex-direction:column;gap:12px">' +
+      '<div><label class="label">اسم العميل (اختياري)</label><input class="input" id="m_scust" value="'+esc(s.customerName)+'" placeholder="عميل مباشر"/></div>' +
+      '<div><label class="label">وصف الصنف المباع</label><input class="input" id="m_sitem" value="'+esc(s.itemDesc)+'" placeholder="مثال: قميص أبيض مقاس L"/></div>' +
+      '<div style="display:flex;gap:10px">' +
+        '<div style="flex:1"><label class="label">الكمية</label><input class="input" id="m_sqty" type="number" min="1" value="'+esc(s.quantity||1)+'"/></div>' +
+        '<div style="flex:1"><label class="label">سعر القطعة</label><input class="input" id="m_sprice" type="number" min="0" value="'+esc(s.unitPrice)+'" placeholder="ج.م"/></div>' +
+      '</div>' +
+      '<div><label class="label">التاريخ</label><input class="input" id="m_sdate" type="date" value="'+esc(s.date)+'"/></div>' +
+      '<div><label class="label">ملاحظات</label><textarea class="input" id="m_snotes" style="min-height:56px;resize:vertical" placeholder="أي ملاحظات إضافية">'+esc(s.notes)+'</textarea></div>' +
+      '<div id="m_serr" class="err" style="display:none"></div>' +
+      '<button class="btn-primary" id="m_ssave">حفظ</button>' +
+    '</div>';
+  return modalShellHtml(s.itemDesc ? "تعديل عملية البيع" : "بيع جديد", body) + '<input type="hidden" id="m_sid" value="'+s.id+'"/>';
+}
+
+/* ---- tailor modal ---- */
+function renderTailorModal(t){
+  let statusOpts = TAILOR_STATUS.map(s => '<option value="'+s.value+'"'+(t.status===s.value?" selected":"")+'>'+s.label+'</option>').join("");
+  const body = '' +
+    '<div style="display:flex;flex-direction:column;gap:12px">' +
+      '<div><label class="label">اسم العميل</label><input class="input" id="m_tcust" value="'+esc(t.customerName)+'" placeholder="اسم العميل"/></div>' +
+      '<div><label class="label">وصف الصنف</label><input class="input" id="m_titem" value="'+esc(t.itemDesc)+'" placeholder="مثال: بدلة كحلي - تقصير الأكمام"/></div>' +
+      '<div><label class="label">الترزي المسؤول</label><input class="input" id="m_ttailor" value="'+esc(t.tailorName)+'" placeholder="اسم الترزي"/></div>' +
+      '<div style="display:flex;gap:10px">' +
+        '<div style="flex:1"><label class="label">تاريخ التسليم المتوقع</label><input class="input" id="m_tdue" type="date" value="'+esc(t.dueDate)+'"/></div>' +
+        '<div style="flex:1"><label class="label">التكلفة (اختياري)</label><input class="input" id="m_tcost" type="number" min="0" value="'+esc(t.cost)+'" placeholder="ج.م"/></div>' +
+      '</div>' +
+      '<div><label class="label">الحالة</label><select class="input" id="m_tstatus">'+statusOpts+'</select></div>' +
+      '<div><label class="label">ملاحظات</label><textarea class="input" id="m_tnotes" style="min-height:56px;resize:vertical" placeholder="تفاصيل التعديل المطلوب">'+esc(t.notes)+'</textarea></div>' +
+      '<div id="m_terr" class="err" style="display:none"></div>' +
+      '<button class="btn-primary" id="m_tsave">حفظ</button>' +
+    '</div>';
+  return modalShellHtml(t.customerName ? "تعديل طلب الترزي" : "طلب تعديل جديد", body) + '<input type="hidden" id="m_tid" value="'+t.id+'"/>';
 }
 
 /* ---- users modal ---- */
@@ -818,6 +1066,9 @@ function bindShellEvents(){
 
   if (state.view === "inventory") bindInventoryEvents();
   if (state.view === "customers") bindCustomersEvents();
+  if (state.view === "rental") bindRentalEvents();
+  if (state.view === "sales") bindSalesEvents();
+  if (state.view === "tailor") bindTailorEvents();
 }
 
 function bindInventoryEvents(){
@@ -884,6 +1135,106 @@ function bindCustomersListEvents(){
   document.querySelectorAll("[data-del-cust]").forEach(btn => {
     btn.addEventListener("click", () => {
       openModal({ type:"confirmDeleteCust", id: btn.getAttribute("data-del-cust") });
+    });
+  });
+}
+
+function bindRentalEvents(){
+  const addBtn = document.getElementById("btnAddRental");
+  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"rental", data:{ id:uid(), customerName:"", itemDesc:"", rentDate:"", dueDate:"", price:"", deposit:"", status:"active", notes:"" } }));
+  const search = document.getElementById("rentalSearch");
+  if (search) search.addEventListener("input", () => { state.rentalQuery = search.value; refreshRentalList(); });
+  bindRentalListEvents();
+}
+function refreshRentalList(){
+  const host = document.getElementById("rentalList");
+  if (!host) return;
+  host.innerHTML = rentalListHtml();
+  bindRentalListEvents();
+}
+function bindRentalListEvents(){
+  document.querySelectorAll("[data-toggle-rental]").forEach(el => {
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-stop]")) return;
+      const id = el.getAttribute("data-toggle-rental");
+      state.expandedRental = state.expandedRental === id ? null : id;
+      refreshRentalList();
+    });
+  });
+  document.querySelectorAll("[data-edit-rental]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-edit-rental");
+      const r = state.rentals.find(x => x.id === id);
+      if (r) openModal({ type:"rental", data: Object.assign({}, r) });
+    });
+  });
+  document.querySelectorAll("[data-del-rental]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      openModal({ type:"confirmDeleteRental", id: btn.getAttribute("data-del-rental") });
+    });
+  });
+}
+
+function bindSalesEvents(){
+  const addBtn = document.getElementById("btnAddSale");
+  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"sale", data:{ id:uid(), customerName:"", itemDesc:"", quantity:1, unitPrice:"", total:"", date:"", notes:"" } }));
+  const search = document.getElementById("salesSearch");
+  if (search) search.addEventListener("input", () => { state.salesQuery = search.value; refreshSalesList(); });
+  bindSalesListEvents();
+}
+function refreshSalesList(){
+  const host = document.getElementById("salesList");
+  if (!host) return;
+  host.innerHTML = salesListHtml();
+  bindSalesListEvents();
+}
+function bindSalesListEvents(){
+  document.querySelectorAll("[data-edit-sale]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-edit-sale");
+      const s = state.sales.find(x => x.id === id);
+      if (s) openModal({ type:"sale", data: Object.assign({}, s) });
+    });
+  });
+  document.querySelectorAll("[data-del-sale]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      openModal({ type:"confirmDeleteSale", id: btn.getAttribute("data-del-sale") });
+    });
+  });
+}
+
+function bindTailorEvents(){
+  const addBtn = document.getElementById("btnAddTailor");
+  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"tailor", data:{ id:uid(), customerName:"", itemDesc:"", tailorName:"", dueDate:"", cost:"", status:"pending", notes:"" } }));
+  const search = document.getElementById("tailorSearch");
+  if (search) search.addEventListener("input", () => { state.tailorQuery = search.value; refreshTailorList(); });
+  bindTailorListEvents();
+}
+function refreshTailorList(){
+  const host = document.getElementById("tailorList");
+  if (!host) return;
+  host.innerHTML = tailorListHtml();
+  bindTailorListEvents();
+}
+function bindTailorListEvents(){
+  document.querySelectorAll("[data-toggle-tailor]").forEach(el => {
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-stop]")) return;
+      const id = el.getAttribute("data-toggle-tailor");
+      state.expandedTailor = state.expandedTailor === id ? null : id;
+      refreshTailorList();
+    });
+  });
+  document.querySelectorAll("[data-edit-tailor]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-edit-tailor");
+      const t = state.tailorOrders.find(x => x.id === id);
+      if (t) openModal({ type:"tailor", data: Object.assign({}, t) });
+    });
+  });
+  document.querySelectorAll("[data-del-tailor]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      openModal({ type:"confirmDeleteTailor", id: btn.getAttribute("data-del-tailor") });
     });
   });
 }
@@ -955,6 +1306,94 @@ function bindModalEvents(){
     }
   });
 
+  // rental save
+  const mRSave = document.getElementById("m_rsave");
+  if (mRSave) mRSave.addEventListener("click", async () => {
+    const id = document.getElementById("m_rid").value;
+    const customerName = document.getElementById("m_rcust").value.trim();
+    const itemDesc = document.getElementById("m_ritem").value.trim();
+    const rentDate = document.getElementById("m_rrentdate").value;
+    const dueDate = document.getElementById("m_rduedate").value;
+    const price = document.getElementById("m_rprice").value;
+    const deposit = document.getElementById("m_rdeposit").value;
+    const status = document.getElementById("m_rstatus").value;
+    const notes = document.getElementById("m_rnotes").value.trim();
+    const errEl = document.getElementById("m_rerr");
+    if (!customerName){ errEl.textContent = "اكتب اسم العميل"; errEl.style.display = "block"; return; }
+    if (!itemDesc){ errEl.textContent = "اكتب وصف الصنف المؤجر"; errEl.style.display = "block"; return; }
+    mRSave.disabled = true; mRSave.textContent = "جاري الحفظ...";
+    const r = { id, customerName, itemDesc, rentDate, dueDate, price, deposit, status, notes, _ts: Date.now() };
+    try {
+      const arr = await fsGetList("rentals");
+      const idx = arr.findIndex(x => x.id === id);
+      if (idx >= 0) arr[idx] = r; else arr.unshift(r);
+      await fsSaveList("rentals", arr);
+      closeModal();
+      pollOnce();
+    } catch(err){
+      mRSave.disabled = false; mRSave.textContent = "حفظ";
+      errEl.textContent = "حصل خطأ في الحفظ، تأكد من الإنترنت"; errEl.style.display = "block";
+    }
+  });
+
+  // sale save
+  const mSSave = document.getElementById("m_ssave");
+  if (mSSave) mSSave.addEventListener("click", async () => {
+    const id = document.getElementById("m_sid").value;
+    const customerName = document.getElementById("m_scust").value.trim();
+    const itemDesc = document.getElementById("m_sitem").value.trim();
+    const quantity = document.getElementById("m_sqty").value;
+    const unitPrice = document.getElementById("m_sprice").value;
+    const date = document.getElementById("m_sdate").value;
+    const notes = document.getElementById("m_snotes").value.trim();
+    const errEl = document.getElementById("m_serr");
+    if (!itemDesc){ errEl.textContent = "اكتب وصف الصنف المباع"; errEl.style.display = "block"; return; }
+    if (!quantity || Number(quantity) <= 0){ errEl.textContent = "حدد الكمية"; errEl.style.display = "block"; return; }
+    mSSave.disabled = true; mSSave.textContent = "جاري الحفظ...";
+    const total = (Number(quantity)||0) * (Number(unitPrice)||0);
+    const s = { id, customerName, itemDesc, quantity:Number(quantity), unitPrice, total, date, notes, _ts: Date.now() };
+    try {
+      const arr = await fsGetList("sales");
+      const idx = arr.findIndex(x => x.id === id);
+      if (idx >= 0) arr[idx] = s; else arr.unshift(s);
+      await fsSaveList("sales", arr);
+      closeModal();
+      pollOnce();
+    } catch(err){
+      mSSave.disabled = false; mSSave.textContent = "حفظ";
+      errEl.textContent = "حصل خطأ في الحفظ، تأكد من الإنترنت"; errEl.style.display = "block";
+    }
+  });
+
+  // tailor save
+  const mTSave = document.getElementById("m_tsave");
+  if (mTSave) mTSave.addEventListener("click", async () => {
+    const id = document.getElementById("m_tid").value;
+    const customerName = document.getElementById("m_tcust").value.trim();
+    const itemDesc = document.getElementById("m_titem").value.trim();
+    const tailorName = document.getElementById("m_ttailor").value.trim();
+    const dueDate = document.getElementById("m_tdue").value;
+    const cost = document.getElementById("m_tcost").value;
+    const status = document.getElementById("m_tstatus").value;
+    const notes = document.getElementById("m_tnotes").value.trim();
+    const errEl = document.getElementById("m_terr");
+    if (!customerName){ errEl.textContent = "اكتب اسم العميل"; errEl.style.display = "block"; return; }
+    if (!itemDesc){ errEl.textContent = "اكتب وصف الصنف"; errEl.style.display = "block"; return; }
+    mTSave.disabled = true; mTSave.textContent = "جاري الحفظ...";
+    const t = { id, customerName, itemDesc, tailorName, dueDate, cost, status, notes, _ts: Date.now() };
+    try {
+      const arr = await fsGetList("tailor");
+      const idx = arr.findIndex(x => x.id === id);
+      if (idx >= 0) arr[idx] = t; else arr.unshift(t);
+      await fsSaveList("tailor", arr);
+      closeModal();
+      pollOnce();
+    } catch(err){
+      mTSave.disabled = false; mTSave.textContent = "حفظ";
+      errEl.textContent = "حصل خطأ في الحفظ، تأكد من الإنترنت"; errEl.style.display = "block";
+    }
+  });
+
   // confirm delete
   const confirmYes = document.getElementById("confirmYes");
   const confirmCancel = document.getElementById("confirmCancel");
@@ -971,6 +1410,27 @@ function bindModalEvents(){
       confirmYes.addEventListener("click", async () => {
         const arr = await fsGetList("customers");
         await fsSaveList("customers", arr.filter(x => x.id !== state.modal.id));
+        closeModal();
+        pollOnce();
+      });
+    } else if (state.modal.type === "confirmDeleteRental"){
+      confirmYes.addEventListener("click", async () => {
+        const arr = await fsGetList("rentals");
+        await fsSaveList("rentals", arr.filter(x => x.id !== state.modal.id));
+        closeModal();
+        pollOnce();
+      });
+    } else if (state.modal.type === "confirmDeleteSale"){
+      confirmYes.addEventListener("click", async () => {
+        const arr = await fsGetList("sales");
+        await fsSaveList("sales", arr.filter(x => x.id !== state.modal.id));
+        closeModal();
+        pollOnce();
+      });
+    } else if (state.modal.type === "confirmDeleteTailor"){
+      confirmYes.addEventListener("click", async () => {
+        const arr = await fsGetList("tailor");
+        await fsSaveList("tailor", arr.filter(x => x.id !== state.modal.id));
         closeModal();
         pollOnce();
       });
