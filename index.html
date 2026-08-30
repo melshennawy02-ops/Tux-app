@@ -830,7 +830,6 @@ function leaderboardRowsHtml(list){
 function topSellerBlockHtml(){
   const today = topSellersToday();
   const month = topSellersMonth();
-  if (today.length === 0 && month.length === 0) return "";
   return '<div class="card" style="margin-bottom:14px">' +
     '<div style="font-weight:700;color:var(--navy);font-size:13.5px;margin-bottom:10px">🏆 لوحة المتصدرين بالمبيعات</div>' +
     '<div style="font-size:11px;color:var(--gold);font-weight:700;margin-bottom:2px">اليوم</div>' +
