@@ -248,11 +248,11 @@ const MODULES = [
   { key:"customers", label:"العملاء", icon:"users", ready:true },
   { key:"suppliers", label:"الموردين", icon:"truck", ready:true },
   { key:"accounts", label:"الحسابات", icon:"wallet", ready:true },
-  { key:"expenses", label:"المصروفات", icon:"receipt", ready:false },
-  { key:"profits", label:"الأرباح", icon:"trending", ready:false },
+  { key:"expenses", label:"المصروفات", icon:"receipt", ready:true },
+  { key:"profits", label:"الأرباح", icon:"trending", ready:true },
   { key:"tailor", label:"الترزي", icon:"scissors", ready:true },
-  { key:"packages", label:"الباقات", icon:"gift", ready:false },
-  { key:"reports", label:"التقارير", icon:"report", ready:false },
+  { key:"packages", label:"الباقات", icon:"gift", ready:true },
+  { key:"reports", label:"التقارير", icon:"report", ready:true },
 ];
 const ITEM_TYPES = ["بدلة","قميص","حذاء","بنطلون","أخرى"];
 
@@ -329,6 +329,8 @@ function supplierBalance(supplierName){
     .reduce((sum,e) => sum + (e.type === "purchase" ? Number(e.amount||0) : -Number(e.amount||0)), 0);
 }
 
+const EXPENSE_CATEGORIES = ["إيجار المحل","كهرباء ومياه","مرتبات","غسيل وكوي","صيانة","تسويق وإعلانات","أخرى"];
+
 /* =========================================================
    state
    ========================================================= */
@@ -344,6 +346,8 @@ const state = {
   tailorOrders:[], tailorLoaded:false, tailorQuery:"", expandedTailor:null,
   suppliers:[], suppliersLoaded:false, supplierQuery:"", expandedSupplier:null,
   accountEntries:[], accountsLoaded:false, accountQuery:"", expandedAccount:null,
+  expenses:[], expensesLoaded:false, expenseQuery:"",
+  packages:[], packagesLoaded:false, packageQuery:"",
   modal:null, usersCache:[],
   online:true,
 };
@@ -504,10 +508,11 @@ function subscribeData(){
 }
 async function pollOnce(){
   try {
-    const [inv, cust, rent, sale, tailor, sup, acc] = await Promise.all([
+    const [inv, cust, rent, sale, tailor, sup, acc, exp, pkg] = await Promise.all([
       fsGetList("inventory"), fsGetList("customers"),
       fsGetList("rentals"), fsGetList("sales"), fsGetList("tailor"),
-      fsGetList("suppliers"), fsGetList("accounts")
+      fsGetList("suppliers"), fsGetList("accounts"),
+      fsGetList("expenses"), fsGetList("packages")
     ]);
     inv.sort((a,b) => (b._ts||0) - (a._ts||0));
     cust.sort((a,b) => (b._ts||0) - (a._ts||0));
@@ -516,6 +521,8 @@ async function pollOnce(){
     tailor.sort((a,b) => (b._ts||0) - (a._ts||0));
     sup.sort((a,b) => (b._ts||0) - (a._ts||0));
     acc.sort((a,b) => (b._ts||0) - (a._ts||0));
+    exp.sort((a,b) => (b._ts||0) - (a._ts||0));
+    pkg.sort((a,b) => (b._ts||0) - (a._ts||0));
     state.inventory = inv;
     state.customers = cust;
     state.rentals = rent;
@@ -523,6 +530,8 @@ async function pollOnce(){
     state.tailorOrders = tailor;
     state.suppliers = sup;
     state.accountEntries = acc;
+    state.expenses = exp;
+    state.packages = pkg;
     state.invLoaded = true;
     state.custLoaded = true;
     state.rentalsLoaded = true;
@@ -530,6 +539,8 @@ async function pollOnce(){
     state.tailorLoaded = true;
     state.suppliersLoaded = true;
     state.accountsLoaded = true;
+    state.expensesLoaded = true;
+    state.packagesLoaded = true;
     state.online = true;
     onDataChanged();
   } catch (e){
@@ -548,6 +559,12 @@ function onDataChanged(){
   if (state.view === "tailor" && document.getElementById("tailorList")) refreshTailorList();
   if (state.view === "suppliers" && document.getElementById("supplierList")) refreshSuppliersList();
   if (state.view === "accounts" && document.getElementById("accountsContent")) refreshAccountsView();
+  if (state.view === "expenses" && document.getElementById("expenseList")) refreshExpensesList();
+  if (state.view === "packages" && document.getElementById("packageList")) refreshPackagesList();
+  if ((state.view === "profits" || state.view === "reports") && document.getElementById("mainContent")){
+    document.getElementById("mainContent").innerHTML = renderMainContent(MODULES.find(m => m.key === state.view));
+    bindShellDashboardClicks();
+  }
   if (state.view === "dashboard" && document.getElementById("mainContent")){
     document.getElementById("mainContent").innerHTML = renderDashboard();
     bindShellDashboardClicks();
@@ -618,6 +635,10 @@ function renderMainContent(current){
   if (state.view === "tailor") return renderTailor();
   if (state.view === "suppliers") return renderSuppliers();
   if (state.view === "accounts") return renderAccounts();
+  if (state.view === "expenses") return renderExpenses();
+  if (state.view === "packages") return renderPackages();
+  if (state.view === "profits") return renderProfits();
+  if (state.view === "reports") return renderReports();
   return renderComingSoon(current);
 }
 
@@ -1049,6 +1070,188 @@ function renderAccounts(){
 }
 
 /* =========================================================
+   Expenses (المصروفات)
+   ========================================================= */
+function filteredExpenses(){
+  const q = state.expenseQuery.toLowerCase();
+  return state.expenses.filter(x => !q || (x.category||"").toLowerCase().includes(q) || (x.notes||"").toLowerCase().includes(q));
+}
+function expensesListHtml(){
+  const list = filteredExpenses();
+  if (!state.expensesLoaded){
+    return '<div class="empty">'+icon("cloud",30,"var(--line)")+'<div style="margin-top:10px;font-size:14px">جاري التحميل من السحابة...</div></div>';
+  }
+  if (list.length === 0){
+    return '<div class="empty">'+icon("receipt",34,"var(--line)")+'<div style="margin-top:10px;font-size:14px">'+
+      (state.expenses.length===0 ? "لسه مفيش مصروفات مسجلة — ابدأ بإضافة أول مصروف" : "مفيش نتائج مطابقة")+'</div></div>';
+  }
+  return '<div style="display:flex;flex-direction:column;gap:10px">' + list.map(x => {
+    return '<div class="card row">' +
+      '<div style="width:38px;height:38px;border-radius:10px;background:var(--cream);display:flex;align-items:center;justify-content:center;flex-shrink:0">'+icon("receipt",17,"var(--navy)")+'</div>' +
+      '<div style="flex:1;min-width:0">' +
+        '<div style="font-weight:600;color:var(--navy);font-size:14.5px">'+esc(x.category||"—")+'</div>' +
+        '<div style="font-size:12px;color:var(--ink-soft);margin-top:2px">'+(x.date?esc(x.date):"")+(x.notes?' · '+esc(x.notes):'')+'</div>' +
+      '</div>' +
+      '<div style="font-weight:700;color:var(--red);font-size:14.5px;flex-shrink:0">'+esc(x.amount)+' ج.م</div>' +
+      '<div style="display:flex;gap:6px;flex-shrink:0">' +
+        '<button class="btn-icon" data-edit-expense="'+x.id+'">'+icon("pencil",15,"var(--navy)")+'</button>' +
+        '<button class="btn-icon" data-del-expense="'+x.id+'">'+icon("trash",15,"var(--red)")+'</button>' +
+      '</div></div>';
+  }).join("") + '</div>';
+}
+function renderExpenses(){
+  const total = state.expenses.reduce((sum,x) => sum + (Number(x.amount)||0), 0);
+  return pageHeader("receipt","المصروفات", state.expenses.length+" مصروف مسجل",
+      '<button class="btn-add" id="btnAddExpense">'+icon("plus",16)+' مصروف جديد</button>') +
+    (state.expenses.length>0 ? '<div class="card" style="background:var(--navy);border:none;margin-bottom:16px"><div style="color:var(--gold-soft);font-size:13px">إجمالي المصروفات</div><div style="color:#fff;font-size:22px;font-weight:700;margin-top:2px">'+total+' ج.م</div></div>' : '') +
+    '<div style="position:relative;margin-bottom:16px">' +
+      '<span style="position:absolute;right:12px;top:12px">'+icon("search",15,"var(--ink-soft)")+'</span>' +
+      '<input class="input" style="padding-right:36px" id="expenseSearch" placeholder="ابحث بنوع المصروف أو ملاحظة" value="'+esc(state.expenseQuery)+'"/></div>' +
+    '<div id="expenseList">' + expensesListHtml() + '</div>';
+}
+
+/* =========================================================
+   Packages (الباقات)
+   ========================================================= */
+function filteredPackages(){
+  const q = state.packageQuery.toLowerCase();
+  return state.packages.filter(p => !q || (p.name||"").toLowerCase().includes(q) || (p.description||"").toLowerCase().includes(q));
+}
+function packagesListHtml(){
+  const list = filteredPackages();
+  if (!state.packagesLoaded){
+    return '<div class="empty">'+icon("cloud",30,"var(--line)")+'<div style="margin-top:10px;font-size:14px">جاري التحميل من السحابة...</div></div>';
+  }
+  if (list.length === 0){
+    return '<div class="empty">'+icon("gift",34,"var(--line)")+'<div style="margin-top:10px;font-size:14px">'+
+      (state.packages.length===0 ? "لسه مفيش باقات — ابدأ بإضافة أول باقة" : "مفيش نتائج مطابقة")+'</div></div>';
+  }
+  return '<div style="display:flex;flex-direction:column;gap:10px">' + list.map(p => {
+    return '<div class="card">' +
+      '<div class="row" style="align-items:flex-start">' +
+        '<div style="width:38px;height:38px;border-radius:10px;background:var(--cream);display:flex;align-items:center;justify-content:center;flex-shrink:0">'+icon("gift",17,"var(--gold)")+'</div>' +
+        '<div style="flex:1;min-width:0">' +
+          '<div style="font-weight:600;color:var(--navy);font-size:14.5px">'+esc(p.name||"باقة بدون اسم")+'</div>' +
+          (p.description ? '<div style="font-size:12.5px;color:var(--ink-soft);margin-top:3px">'+esc(p.description)+'</div>' : '') +
+          (p.price ? '<div style="font-size:13px;color:var(--navy);font-weight:700;margin-top:4px">'+esc(p.price)+' ج.م</div>' : '') +
+        '</div>' +
+        '<div style="display:flex;gap:6px;flex-shrink:0">' +
+          '<button class="btn-icon" data-edit-package="'+p.id+'">'+icon("pencil",15,"var(--navy)")+'</button>' +
+          '<button class="btn-icon" data-del-package="'+p.id+'">'+icon("trash",15,"var(--red)")+'</button>' +
+        '</div>' +
+      '</div></div>';
+  }).join("") + '</div>';
+}
+function renderPackages(){
+  return pageHeader("gift","الباقات", state.packages.length+" باقة مسجلة",
+      '<button class="btn-add" id="btnAddPackage">'+icon("plus",16)+' باقة جديدة</button>') +
+    '<div style="position:relative;margin-bottom:16px">' +
+      '<span style="position:absolute;right:12px;top:12px">'+icon("search",15,"var(--ink-soft)")+'</span>' +
+      '<input class="input" style="padding-right:36px" id="packageSearch" placeholder="ابحث باسم الباقة" value="'+esc(state.packageQuery)+'"/></div>' +
+    '<div id="packageList">' + packagesListHtml() + '</div>';
+}
+
+/* =========================================================
+   Profits (الأرباح) — computed, read-only
+   ========================================================= */
+function renderProfits(){
+  if (!state.salesLoaded || !state.rentalsLoaded || !state.expensesLoaded || !state.accountsLoaded){
+    return pageHeader("trending","الأرباح","تقدير سريع لأرباح المحل") +
+      '<div class="empty">'+icon("cloud",30,"var(--line)")+'<div style="margin-top:10px;font-size:14px">جاري تحميل البيانات من السحابة...</div></div>';
+  }
+  const salesRevenue = state.sales.reduce((sum,s) => sum + (Number(s.total)||0), 0);
+  const rentalRevenue = state.rentals.reduce((sum,r) => sum + (Number(r.price)||0), 0);
+  const totalExpenses = state.expenses.reduce((sum,x) => sum + (Number(x.amount)||0), 0);
+  const supplierPurchases = state.accountEntries.filter(e => e.type==="purchase").reduce((sum,e) => sum + (Number(e.amount)||0), 0);
+  const totalRevenue = salesRevenue + rentalRevenue;
+  const totalCosts = totalExpenses + supplierPurchases;
+  const net = totalRevenue - totalCosts;
+  const cards = [
+    { label:"إيرادات المبيعات", value:salesRevenue, icon:"bag", color:"var(--green)" },
+    { label:"إيرادات الإيجار", value:rentalRevenue, icon:"shirt", color:"var(--green)" },
+    { label:"المصروفات", value:totalExpenses, icon:"receipt", color:"var(--red)" },
+    { label:"مشتريات من الموردين", value:supplierPurchases, icon:"truck", color:"var(--red)" },
+  ];
+  let cardsHtml = "";
+  cards.forEach(c => {
+    cardsHtml += '<div class="card">' +
+      '<div style="margin-bottom:8px">'+icon(c.icon,18,c.color)+'</div>' +
+      '<div style="font-size:19px;font-weight:700;color:var(--navy)">'+c.value+' <span style="font-size:11px;font-weight:400;color:var(--ink-soft)">ج.م</span></div>' +
+      '<div style="font-size:12px;color:var(--ink-soft);margin-top:2px">'+c.label+'</div></div>';
+  });
+  return pageHeader("trending","الأرباح","تقدير سريع لأرباح المحل") +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px">'+cardsHtml+'</div>' +
+    '<div class="card" style="background:var(--navy);border:none;margin-bottom:16px;padding:20px">' +
+      '<div style="color:var(--gold-soft);font-size:13px;margin-bottom:4px">صافي الربح التقديري</div>' +
+      '<div style="color:'+(net>=0?"#7CD992":"#F0A0A0")+';font-size:28px;font-weight:700">'+net+' ج.م</div>' +
+    '</div>' +
+    '<div style="font-size:12px;color:var(--ink-soft);background:var(--cream);border-radius:8px;padding:10px 12px">' +
+      'ده رقم تقديري بيحسب: (إيرادات المبيعات + إيرادات الإيجار) − (المصروفات + المشتريات من الموردين). مبياخدش في الاعتبار حاجات زي التأمينات المستردة أو تعديلات يدوية.' +
+    '</div>';
+}
+
+/* =========================================================
+   Reports (التقارير) — computed, read-only
+   ========================================================= */
+function renderReports(){
+  if (!state.invLoaded || !state.custLoaded || !state.rentalsLoaded || !state.salesLoaded || !state.tailorLoaded){
+    return pageHeader("report","التقارير","ملخص شامل لنشاط المحل") +
+      '<div class="empty">'+icon("cloud",30,"var(--line)")+'<div style="margin-top:10px;font-size:14px">جاري تحميل البيانات من السحابة...</div></div>';
+  }
+  const activeRentals = state.rentals.filter(r => r.status==="active" || r.status==="late").length;
+  const lateRentals = state.rentals.filter(r => r.status==="late").length;
+  const pendingTailor = state.tailorOrders.filter(t => t.status==="pending").length;
+  const readyTailor = state.tailorOrders.filter(t => t.status==="ready").length;
+  const lowStockItems = state.inventory.filter(i => availableQtyOf(i) <= 2);
+
+  // top rented items
+  const rentCount = {};
+  state.rentals.forEach(r => { const k = r.itemDesc || "—"; rentCount[k] = (rentCount[k]||0) + 1; });
+  const topRented = Object.keys(rentCount).sort((a,b) => rentCount[b]-rentCount[a]).slice(0,5);
+
+  const statCards = [
+    { label:"عمليات إيجار نشطة", value:activeRentals, icon:"shirt", color:"var(--amber)" },
+    { label:"إيجارات متأخرة", value:lateRentals, icon:"warn", color:"var(--red)" },
+    { label:"طلبات ترزي قيد التنفيذ", value:pendingTailor, icon:"scissors", color:"var(--amber)" },
+    { label:"طلبات ترزي جاهزة للتسليم", value:readyTailor, icon:"check", color:"var(--green)" },
+  ];
+  let statsHtml = "";
+  statCards.forEach(c => {
+    statsHtml += '<div class="card">' +
+      '<div style="margin-bottom:8px">'+icon(c.icon,18,c.color)+'</div>' +
+      '<div style="font-size:22px;font-weight:700;color:var(--navy)">'+c.value+'</div>' +
+      '<div style="font-size:12px;color:var(--ink-soft);margin-top:2px">'+c.label+'</div></div>';
+  });
+
+  const topRentedHtml = topRented.length === 0 ? '<div style="font-size:12.5px;color:var(--ink-soft)">لسه مفيش بيانات كفاية</div>' :
+    topRented.map(function(k,idx){
+      return '<div style="display:flex;justify-content:space-between;padding:8px 0;'+(idx<topRented.length-1?'border-bottom:1px solid var(--line)':'')+'">' +
+        '<span style="font-size:13px;color:var(--ink)">'+esc(k)+'</span>' +
+        '<span style="font-size:13px;font-weight:700;color:var(--navy)">'+rentCount[k]+' مرة</span>' +
+      '</div>';
+    }).join("");
+
+  const lowStockHtml = lowStockItems.length === 0 ? '<div style="font-size:12.5px;color:var(--ink-soft)">مفيش أصناف كميتها قليلة حالياً</div>' :
+    lowStockItems.slice(0,6).map(function(i){
+      return '<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line)">' +
+        '<span style="font-size:13px;color:var(--ink)">'+esc(i.type)+(i.color?" - "+esc(i.color):"")+(i.size?" - مقاس "+esc(i.size):"")+'</span>' +
+        '<span style="font-size:13px;font-weight:700;color:var(--red)">متاح '+availableQtyOf(i)+'</span>' +
+      '</div>';
+    }).join("");
+
+  return pageHeader("report","التقارير","ملخص شامل لنشاط المحل") +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px">'+statsHtml+'</div>' +
+    '<div class="card" style="margin-bottom:16px">' +
+      '<div style="font-weight:700;color:var(--navy);font-size:14px;margin-bottom:10px">أكتر الأصناف تأجيراً</div>' +
+      topRentedHtml +
+    '</div>' +
+    '<div class="card">' +
+      '<div style="font-weight:700;color:var(--navy);font-size:14px;margin-bottom:10px">أصناف محتاجة تجديد مخزون</div>' +
+      lowStockHtml +
+    '</div>';
+}
+
+/* =========================================================
    Modal shell
    ========================================================= */
 function openModal(modal){ state.modal = modal; renderModalInto(); }
@@ -1091,6 +1294,8 @@ function renderModalInto(){
   else if (m.type === "tailor") host.innerHTML = renderTailorModal(m.data);
   else if (m.type === "supplier") host.innerHTML = renderSupplierModal(m.data);
   else if (m.type === "account") host.innerHTML = renderAccountModal(m.data);
+  else if (m.type === "expense") host.innerHTML = renderExpenseModal(m.data);
+  else if (m.type === "package") host.innerHTML = renderPackageModal(m.data);
   else if (m.type === "users") host.innerHTML = renderUsersModal();
   else if (m.type === "confirmDeleteItem") host.innerHTML = confirmHtml("هل تريد حذف هذا الصنف من المخزون؟");
   else if (m.type === "confirmDeleteCust") host.innerHTML = confirmHtml("هل تريد حذف بيانات هذا العميل؟");
@@ -1099,6 +1304,8 @@ function renderModalInto(){
   else if (m.type === "confirmDeleteTailor") host.innerHTML = confirmHtml("هل تريد حذف طلب الترزي ده؟");
   else if (m.type === "confirmDeleteSupplier") host.innerHTML = confirmHtml("هل تريد حذف بيانات هذا المورد؟");
   else if (m.type === "confirmDeleteAccount") host.innerHTML = confirmHtml("هل تريد حذف حركة الحساب دي؟");
+  else if (m.type === "confirmDeleteExpense") host.innerHTML = confirmHtml("هل تريد حذف هذا المصروف؟");
+  else if (m.type === "confirmDeletePackage") host.innerHTML = confirmHtml("هل تريد حذف هذه الباقة؟");
   else if (m.type === "confirmDeleteUser") host.innerHTML = confirmHtml("هل تريد حذف هذا المستخدم؟");
 
   bindModalEvents();
@@ -1227,6 +1434,35 @@ function renderAccountModal(e){
       '<button class="btn-primary" id="m_accsave">حفظ</button>' +
     '</div>';
   return modalShellHtml(e.supplierName ? "تعديل الحركة" : "حركة حساب جديدة", body) + '<input type="hidden" id="m_accid" value="'+e.id+'"/>';
+}
+
+/* ---- expense modal ---- */
+function renderExpenseModal(x){
+  let catOpts = EXPENSE_CATEGORIES.map(c => '<option value="'+esc(c)+'"'+(x.category===c?" selected":"")+'>'+esc(c)+'</option>').join("");
+  const body = '' +
+    '<div style="display:flex;flex-direction:column;gap:12px">' +
+      '<div><label class="label">نوع المصروف</label><select class="input" id="m_expcat">'+catOpts+'</select></div>' +
+      '<div><label class="label">المبلغ</label><input class="input" id="m_expamount" type="number" min="0" value="'+esc(x.amount)+'" placeholder="ج.م"/></div>' +
+      '<div><label class="label">التاريخ</label><input class="input" id="m_expdate" type="date" value="'+esc(x.date)+'"/></div>' +
+      '<div><label class="label">ملاحظات</label><textarea class="input" id="m_expnotes" style="min-height:56px;resize:vertical" placeholder="أي تفاصيل إضافية">'+esc(x.notes)+'</textarea></div>' +
+      '<div id="m_experr" class="err" style="display:none"></div>' +
+      '<button class="btn-primary" id="m_expsave">حفظ</button>' +
+    '</div>';
+  return modalShellHtml(x.date ? "تعديل المصروف" : "مصروف جديد", body) + '<input type="hidden" id="m_expid" value="'+x.id+'"/>';
+}
+
+/* ---- package modal ---- */
+function renderPackageModal(p){
+  const body = '' +
+    '<div style="display:flex;flex-direction:column;gap:12px">' +
+      '<div><label class="label">اسم الباقة</label><input class="input" id="m_pkgname" value="'+esc(p.name)+'" placeholder="مثال: باقة العريس"/></div>' +
+      '<div><label class="label">محتويات الباقة</label><textarea class="input" id="m_pkgdesc" style="min-height:64px;resize:vertical" placeholder="مثال: بدلة + قميص + حذاء + كرافتة">'+esc(p.description)+'</textarea></div>' +
+      '<div><label class="label">سعر الباقة</label><input class="input" id="m_pkgprice" type="number" min="0" value="'+esc(p.price)+'" placeholder="ج.م"/></div>' +
+      '<div><label class="label">ملاحظات</label><textarea class="input" id="m_pkgnotes" style="min-height:56px;resize:vertical" placeholder="أي تفاصيل إضافية">'+esc(p.notes)+'</textarea></div>' +
+      '<div id="m_pkgerr" class="err" style="display:none"></div>' +
+      '<button class="btn-primary" id="m_pkgsave">حفظ</button>' +
+    '</div>';
+  return modalShellHtml(p.name ? "تعديل الباقة" : "باقة جديدة", body) + '<input type="hidden" id="m_pkgid" value="'+p.id+'"/>';
 }
 
 /* ---- rental modal ---- */
@@ -1377,6 +1613,8 @@ function bindShellEvents(){
   if (state.view === "tailor") bindTailorEvents();
   if (state.view === "suppliers") bindSuppliersEvents();
   if (state.view === "accounts") bindAccountsEvents();
+  if (state.view === "expenses") bindExpensesEvents();
+  if (state.view === "packages") bindPackagesEvents();
 }
 
 function bindInventoryEvents(){
@@ -1622,6 +1860,62 @@ function bindAccountsListEvents(){
   document.querySelectorAll("[data-del-account]").forEach(btn => {
     btn.addEventListener("click", () => {
       openModal({ type:"confirmDeleteAccount", id: btn.getAttribute("data-del-account") });
+    });
+  });
+}
+
+function bindExpensesEvents(){
+  const addBtn = document.getElementById("btnAddExpense");
+  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"expense", data:{ id:uid(), category:EXPENSE_CATEGORIES[0], amount:"", date:"", notes:"" } }));
+  const search = document.getElementById("expenseSearch");
+  if (search) search.addEventListener("input", () => { state.expenseQuery = search.value; refreshExpensesList(); });
+  bindExpensesListEvents();
+}
+function refreshExpensesList(){
+  const host = document.getElementById("expenseList");
+  if (!host) return;
+  host.innerHTML = expensesListHtml();
+  bindExpensesListEvents();
+}
+function bindExpensesListEvents(){
+  document.querySelectorAll("[data-edit-expense]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-edit-expense");
+      const x = state.expenses.find(v => v.id === id);
+      if (x) openModal({ type:"expense", data: Object.assign({}, x) });
+    });
+  });
+  document.querySelectorAll("[data-del-expense]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      openModal({ type:"confirmDeleteExpense", id: btn.getAttribute("data-del-expense") });
+    });
+  });
+}
+
+function bindPackagesEvents(){
+  const addBtn = document.getElementById("btnAddPackage");
+  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"package", data:{ id:uid(), name:"", description:"", price:"", notes:"" } }));
+  const search = document.getElementById("packageSearch");
+  if (search) search.addEventListener("input", () => { state.packageQuery = search.value; refreshPackagesList(); });
+  bindPackagesListEvents();
+}
+function refreshPackagesList(){
+  const host = document.getElementById("packageList");
+  if (!host) return;
+  host.innerHTML = packagesListHtml();
+  bindPackagesListEvents();
+}
+function bindPackagesListEvents(){
+  document.querySelectorAll("[data-edit-package]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-edit-package");
+      const p = state.packages.find(v => v.id === id);
+      if (p) openModal({ type:"package", data: Object.assign({}, p) });
+    });
+  });
+  document.querySelectorAll("[data-del-package]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      openModal({ type:"confirmDeletePackage", id: btn.getAttribute("data-del-package") });
     });
   });
 }
@@ -2098,6 +2392,56 @@ function bindModalEvents(){
     }
   });
 
+  // expense save
+  const mExpSave = document.getElementById("m_expsave");
+  if (mExpSave) mExpSave.addEventListener("click", async () => {
+    const id = document.getElementById("m_expid").value;
+    const category = document.getElementById("m_expcat").value;
+    const amount = document.getElementById("m_expamount").value;
+    const date = document.getElementById("m_expdate").value;
+    const notes = document.getElementById("m_expnotes").value.trim();
+    const errEl = document.getElementById("m_experr");
+    if (!amount || Number(amount) <= 0){ errEl.textContent = "حدد المبلغ"; errEl.style.display = "block"; return; }
+    mExpSave.disabled = true; mExpSave.textContent = "جاري الحفظ...";
+    const x = { id, category, amount, date, notes, _ts: Date.now() };
+    try {
+      const arr = await fsGetList("expenses");
+      const idx = arr.findIndex(v => v.id === id);
+      if (idx >= 0) arr[idx] = x; else arr.unshift(x);
+      await fsSaveList("expenses", arr);
+      closeModal();
+      pollOnce();
+    } catch(err){
+      mExpSave.disabled = false; mExpSave.textContent = "حفظ";
+      errEl.textContent = "حصل خطأ في الحفظ، تأكد من الإنترنت"; errEl.style.display = "block";
+    }
+  });
+
+  // package save
+  const mPkgSave = document.getElementById("m_pkgsave");
+  if (mPkgSave) mPkgSave.addEventListener("click", async () => {
+    const id = document.getElementById("m_pkgid").value;
+    const name = document.getElementById("m_pkgname").value.trim();
+    const description = document.getElementById("m_pkgdesc").value.trim();
+    const price = document.getElementById("m_pkgprice").value;
+    const notes = document.getElementById("m_pkgnotes").value.trim();
+    const errEl = document.getElementById("m_pkgerr");
+    if (!name){ errEl.textContent = "اكتب اسم الباقة"; errEl.style.display = "block"; return; }
+    mPkgSave.disabled = true; mPkgSave.textContent = "جاري الحفظ...";
+    const p = { id, name, description, price, notes, _ts: Date.now() };
+    try {
+      const arr = await fsGetList("packages");
+      const idx = arr.findIndex(v => v.id === id);
+      if (idx >= 0) arr[idx] = p; else arr.unshift(p);
+      await fsSaveList("packages", arr);
+      closeModal();
+      pollOnce();
+    } catch(err){
+      mPkgSave.disabled = false; mPkgSave.textContent = "حفظ";
+      errEl.textContent = "حصل خطأ في الحفظ، تأكد من الإنترنت"; errEl.style.display = "block";
+    }
+  });
+
   // confirm delete
   const confirmYes = document.getElementById("confirmYes");
   const confirmCancel = document.getElementById("confirmCancel");
@@ -2149,6 +2493,20 @@ function bindModalEvents(){
       confirmYes.addEventListener("click", async () => {
         const arr = await fsGetList("accounts");
         await fsSaveList("accounts", arr.filter(x => x.id !== state.modal.id));
+        closeModal();
+        pollOnce();
+      });
+    } else if (state.modal.type === "confirmDeleteExpense"){
+      confirmYes.addEventListener("click", async () => {
+        const arr = await fsGetList("expenses");
+        await fsSaveList("expenses", arr.filter(x => x.id !== state.modal.id));
+        closeModal();
+        pollOnce();
+      });
+    } else if (state.modal.type === "confirmDeletePackage"){
+      confirmYes.addEventListener("click", async () => {
+        const arr = await fsGetList("packages");
+        await fsSaveList("packages", arr.filter(x => x.id !== state.modal.id));
         closeModal();
         pollOnce();
       });
