@@ -143,7 +143,11 @@ async function fsSetDoc(collection, id, data){
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(fsEncodeFields(data)),
   });
-  if (!res.ok) throw new Error("fs set " + res.status);
+  if (!res.ok) {
+    let detail = "";
+    try { detail = (await res.json()).error.message; } catch(e2){}
+    throw new Error("fs set " + res.status + (detail ? " - " + detail : ""));
+  }
 }
 async function fsDeleteDoc(collection, id){
   const res = await fetch(FS_BASE + "/" + collection + "/" + id + "?key=" + API_KEY, { method: "DELETE" });
@@ -371,7 +375,7 @@ function bindAuthEvents(){
         afterLogin();
       } catch(err){
         submitBtn.disabled = false; submitBtn.textContent = "إنشاء الحساب والدخول";
-        showErr("حصل خطأ في الاتصال، حاول تاني");
+        showErr("خطأ: " + (err && err.message ? err.message : err));
       }
     } else {
       if (!username) return showErr("اكتب اسم المستخدم");
@@ -388,7 +392,7 @@ function bindAuthEvents(){
         }
       } catch(err){
         submitBtn.disabled = false; submitBtn.textContent = "دخول";
-        showErr("حصل خطأ في الاتصال، حاول تاني");
+        showErr("خطأ: " + (err && err.message ? err.message : err));
       }
     }
   });
