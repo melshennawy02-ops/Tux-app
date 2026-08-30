@@ -256,6 +256,29 @@ const MODULES = [
 ];
 const ITEM_TYPES = ["بدلة","قميص","حذاء","بنطلون","أخرى"];
 
+/* =========================================================
+   permissions — admin has full access always; staff access
+   is controlled per module, editable from "إدارة المستخدمين"
+   ========================================================= */
+const PERMISSION_MODULES = MODULES.filter(m => m.key !== "dashboard").map(m => ({ key:m.key, label:m.label }));
+function defaultPermissions(){
+  const p = {};
+  PERMISSION_MODULES.forEach(m => { p[m.key] = (m.key !== "profits"); }); // revenue/profit hidden by default for new staff
+  return p;
+}
+function userPermissions(user){
+  if (!user) return defaultPermissions();
+  if (user.role === "admin") return null; // null = unrestricted
+  return Object.assign(defaultPermissions(), user.permissions || {});
+}
+function canAccess(moduleKey){
+  if (moduleKey === "dashboard") return true;
+  if (state.userRole === "admin") return true;
+  if (!state.userPermissions) return true; // safety fallback
+  return state.userPermissions[moduleKey] !== false;
+}
+function isAdmin(){ return state.userRole === "admin"; }
+
 /* standard Egyptian menswear sizes per category, and common colors */
 const SIZE_PRESETS = {
   "بدلة": ["46","48","50","52","54","56","58","60"],
@@ -342,13 +365,57 @@ function todayStr(){
   const d = new Date();
   return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
 }
+function dateOffsetStr(days){
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+}
+function inDateRange(dateStr, from, to){
+  if (!dateStr) return false;
+  if (from && dateStr < from) return false;
+  if (to && dateStr > to) return false;
+  return true;
+}
+function dateRangeHtml(prefix, fromVal, toVal){
+  return '<div style="display:flex;gap:8px;margin-bottom:10px">' +
+      '<div style="flex:1"><label class="label">من تاريخ</label><input class="input" type="date" id="'+prefix+'From" value="'+esc(fromVal)+'"/></div>' +
+      '<div style="flex:1"><label class="label">إلى تاريخ</label><input class="input" type="date" id="'+prefix+'To" value="'+esc(toVal)+'"/></div>' +
+    '</div>' +
+    '<div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">' +
+      '<button type="button" class="chip" data-range-preset="'+prefix+'|today" style="padding:5px 11px;border-radius:20px;border:1px solid var(--line);background:#fff;font-size:12px;color:var(--navy);cursor:pointer">اليوم</button>' +
+      '<button type="button" class="chip" data-range-preset="'+prefix+'|week" style="padding:5px 11px;border-radius:20px;border:1px solid var(--line);background:#fff;font-size:12px;color:var(--navy);cursor:pointer">آخر 7 أيام</button>' +
+      '<button type="button" class="chip" data-range-preset="'+prefix+'|month" style="padding:5px 11px;border-radius:20px;border:1px solid var(--line);background:#fff;font-size:12px;color:var(--navy);cursor:pointer">الشهر ده</button>' +
+      '<button type="button" class="chip" data-range-preset="'+prefix+'|all" style="padding:5px 11px;border-radius:20px;border:1px solid var(--gold);background:var(--cream);font-size:12px;color:var(--navy);cursor:pointer">كل الفترات</button>' +
+    '</div>';
+}
+function resolveRangePreset(preset){
+  const today = todayStr();
+  if (preset === "today") return { from:today, to:today };
+  if (preset === "week") return { from:dateOffsetStr(-6), to:today };
+  if (preset === "month") return { from: monthKeyOf(today)+"-01", to: today };
+  return { from:"", to:"" };
+}
+function bindDateRangeEvents(prefix, setRange, onChange){
+  const fromEl = document.getElementById(prefix+"From");
+  const toEl = document.getElementById(prefix+"To");
+  if (fromEl) fromEl.addEventListener("change", () => { setRange(fromEl.value, toEl ? toEl.value : ""); onChange(); });
+  if (toEl) toEl.addEventListener("change", () => { setRange(fromEl ? fromEl.value : "", toEl.value); onChange(); });
+  document.querySelectorAll('[data-range-preset^="'+prefix+'|"]').forEach(btn => {
+    btn.addEventListener("click", () => {
+      const preset = btn.getAttribute("data-range-preset").split("|")[1];
+      const r = resolveRangePreset(preset);
+      setRange(r.from, r.to);
+      onChange();
+    });
+  });
+}
 
 /* =========================================================
    state
    ========================================================= */
 const state = {
   bootPhase:"loading", // loading | setup | login | error
-  authed:false, shopName:"", username:"",
+  authed:false, shopName:"", username:"", userRole:"", userPermissions:null,
   view:"dashboard", mobileOpen:false,
   inventory:[], customers:[], invLoaded:false, custLoaded:false,
   invQuery:"", invType:"الكل",
@@ -361,6 +428,9 @@ const state = {
   expenses:[], expensesLoaded:false, expenseQuery:"",
   packages:[], packagesLoaded:false, packageQuery:"",
   closedMonths:[], closedMonthsLoaded:false,
+  expenseFrom:"", expenseTo:"",
+  profitsFrom:"", profitsTo:"",
+  reportsFrom:"", reportsTo:"",
   modal:null, usersCache:[],
   online:true,
 };
@@ -476,7 +546,7 @@ function bindAuthEvents(){
         const firstUser = { id:uid(), username:username, pin:pin, role:"admin" };
         await fsSetDoc("config", "shop", { shopName:shopName });
         await fsSaveList("users", [firstUser]);
-        state.shopName = shopName; state.username = username; state.authed = true;
+        state.shopName = shopName; state.username = username; state.userRole = "admin"; state.userPermissions = null; state.authed = true;
         afterLogin();
       } catch(err){
         submitBtn.disabled = false; submitBtn.textContent = "إنشاء الحساب والدخول";
@@ -489,7 +559,7 @@ function bindAuthEvents(){
         const users = await fsGetList("users");
         const match = users.find(u => u.username.trim().toLowerCase() === username.toLowerCase() && u.pin === pin);
         if (match){
-          state.username = match.username; state.authed = true;
+          state.username = match.username; state.userRole = match.role || "staff"; state.userPermissions = userPermissions(match); state.authed = true;
           afterLogin();
         } else {
           submitBtn.disabled = false; submitBtn.textContent = "دخول";
@@ -574,12 +644,10 @@ function onDataChanged(){
   if (state.view === "tailor" && document.getElementById("tailorList")) refreshTailorList();
   if (state.view === "suppliers" && document.getElementById("supplierList")) refreshSuppliersList();
   if (state.view === "accounts" && document.getElementById("accountsContent")) refreshAccountsView();
-  if (state.view === "expenses" && document.getElementById("expenseList")) refreshExpensesList();
+  if (state.view === "expenses" && document.getElementById("expensesContent")) refreshExpensesContent();
   if (state.view === "packages" && document.getElementById("packageList")) refreshPackagesList();
-  if ((state.view === "profits" || state.view === "reports") && document.getElementById("mainContent")){
-    document.getElementById("mainContent").innerHTML = renderMainContent(MODULES.find(m => m.key === state.view));
-    bindShellDashboardClicks();
-  }
+  if (state.view === "profits" && document.getElementById("profitsContent")) refreshProfitsContent();
+  if (state.view === "reports" && document.getElementById("reportsContent")) refreshReportsContent();
   if (state.view === "dashboard" && document.getElementById("mainContent")){
     document.getElementById("mainContent").innerHTML = renderDashboard();
     bindShellDashboardClicks();
@@ -605,7 +673,7 @@ function renderShell(){
 
 function renderSidebar(){
   let items = "";
-  MODULES.forEach(m => {
+  MODULES.filter(m => canAccess(m.key)).forEach(m => {
     const isActive = state.view === m.key;
     items += '<button class="navitem'+(isActive?" active":"")+'" data-view="'+m.key+'">' +
       icon(m.icon, 17) + '<span style="flex:1">'+m.label+'</span>' +
@@ -619,11 +687,11 @@ function renderSidebar(){
       '<div style="overflow:hidden">' +
         '<div style="color:var(--gold-soft);font-weight:700;font-size:15px;letter-spacing:.5px">TUX</div>' +
         '<div style="color:rgba(255,255,255,0.5);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(state.shopName)+'</div>' +
-        '<div style="color:var(--gold);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px">مسجل دخول: '+esc(state.username)+'</div>' +
+        '<div style="color:var(--gold);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px">مسجل دخول: '+esc(state.username)+(isAdmin()?' (أدمن)':'')+'</div>' +
       '</div></div></div>' +
     '<div style="padding:0 14px">'+tapeRule()+'</div>' +
     '<nav style="flex:1;overflow-y:auto;padding:10px">' + items + '</nav>' +
-    '<div style="padding:0 14px"><button class="sidebar-foot-btn" id="btnUsers" style="margin-bottom:8px">'+icon("users",15)+' إدارة المستخدمين</button></div>' +
+    (isAdmin() ? '<div style="padding:0 14px"><button class="sidebar-foot-btn" id="btnUsers" style="margin-bottom:8px">'+icon("users",15)+' إدارة المستخدمين والصلاحيات</button></div>' : '') +
     '<div style="padding:0 14px 14px"><button class="sidebar-foot-btn" id="btnLogout">'+icon("logout",15)+' تسجيل الخروج</button></div>' +
   '</div>';
 }
@@ -643,6 +711,13 @@ function pageHeader(iconName, title, subtitle, actionHtml){
 }
 
 function renderMainContent(current){
+  if (!canAccess(state.view)){
+    return pageHeader("warn","معندكش صلاحية", "كلّم الأدمن لو محتاج تدخل الجزء ده") +
+      '<div class="card" style="padding:40px 20px;text-align:center">' +
+        icon("warn",34,"var(--amber)") +
+        '<div style="font-size:14px;color:var(--ink-soft);margin-top:10px">حساب ("'+esc(state.username)+'") معندوش صلاحية الوصول للجزء ده. كلّم الأدمن لو محتاج الصلاحية دي.</div>' +
+      '</div>';
+  }
   if (state.view === "dashboard") return renderDashboard();
   if (state.view === "inventory") return renderInventory();
   if (state.view === "customers") return renderCustomers();
@@ -752,25 +827,24 @@ function renderDashboard(){
   const totalOwedSuppliers = state.suppliers.reduce((sum,s) => { const b = supplierBalance(s.name); return sum + (b>0?b:0); }, 0);
 
   const quickActions = [
-    { kind:"rental", icon:"shirt", label:"إيجار جديد" },
-    { kind:"sale", icon:"bag", label:"بيع جديد" },
-    { kind:"customer", icon:"users", label:"عميل جديد" },
-    { kind:"item", icon:"package", label:"صنف جديد" },
-  ];
-  let quickHtml = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:20px">';
-  quickActions.forEach(q => {
-    quickHtml += '<button data-quick="'+q.kind+'" style="display:flex;flex-direction:column;align-items:center;gap:5px;padding:12px 4px;border-radius:12px;border:1px solid var(--line);background:var(--paper);cursor:pointer">' +
-      '<div style="width:32px;height:32px;border-radius:50%;background:var(--navy);display:flex;align-items:center;justify-content:center">'+icon(q.icon,15,"var(--gold)")+'</div>' +
-      '<span style="font-size:10.5px;color:var(--navy);font-weight:600">'+q.label+'</span>' +
-    '</button>';
-  });
-  quickHtml += '</div>';
+    { kind:"rental", icon:"shirt", label:"إيجار جديد", perm:"rental" },
+    { kind:"sale", icon:"bag", label:"بيع جديد", perm:"sales" },
+    { kind:"customer", icon:"users", label:"عميل جديد", perm:"customers" },
+    { kind:"item", icon:"package", label:"صنف جديد", perm:"inventory" },
+  ].filter(q => canAccess(q.perm));
+  let quickHtml = "";
+  if (quickActions.length > 0){
+    quickHtml = '<div style="display:grid;grid-template-columns:repeat('+quickActions.length+',1fr);gap:8px;margin-bottom:20px">';
+    quickActions.forEach(q => {
+      quickHtml += '<button data-quick="'+q.kind+'" style="display:flex;flex-direction:column;align-items:center;gap:5px;padding:12px 4px;border-radius:12px;border:1px solid var(--line);background:var(--paper);cursor:pointer">' +
+        '<div style="width:32px;height:32px;border-radius:50%;background:var(--navy);display:flex;align-items:center;justify-content:center">'+icon(q.icon,15,"var(--gold)")+'</div>' +
+        '<span style="font-size:10.5px;color:var(--navy);font-weight:600">'+q.label+'</span>' +
+      '</button>';
+    });
+    quickHtml += '</div>';
+  }
 
-  return pageHeader("dashboard", greetingText(), "ملخص سريع لحالة "+(state.shopName||"المحل")) +
-    quickHtml +
-    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px">'+cardsHtml+'</div>' +
-    (lowStock > 0 ? '<div class="card" style="background:var(--amber-bg);border-color:var(--gold);display:flex;align-items:center;gap:10px;margin-bottom:16px">'+
-      icon("warn",17,"var(--amber)")+'<div style="font-size:13px;color:#6b4e0a">في '+lowStock+' صنف الكمية فيه وصلت 2 أو أقل — راجع المخزون</div></div>' : '') +
+  const financeBlock = isAdmin() ? (
     '<div style="background:var(--navy);border-radius:14px;padding:16px 18px;margin-bottom:16px">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">' +
         '<span style="color:var(--gold-soft);font-weight:700;font-size:13.5px">إيرادات اليوم</span>' +
@@ -783,7 +857,15 @@ function renderDashboard(){
       (totalOwedSuppliers > 0 ? '<div style="display:flex;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid rgba(255,255,255,0.12);cursor:pointer" data-view="accounts">'+
         '<span style="color:rgba(255,255,255,0.7);font-size:12.5px">إجمالي المستحق للموردين</span>'+
         '<span style="color:#F0A0A0;font-weight:700;font-size:14px">'+totalOwedSuppliers+' ج.م</span></div>' : '') +
-    '</div>' +
+    '</div>'
+  ) : "";
+
+  return pageHeader("dashboard", greetingText(), "ملخص سريع لحالة "+(state.shopName||"المحل")) +
+    quickHtml +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px">'+cardsHtml+'</div>' +
+    (lowStock > 0 ? '<div class="card" style="background:var(--amber-bg);border-color:var(--gold);display:flex;align-items:center;gap:10px;margin-bottom:16px">'+
+      icon("warn",17,"var(--amber)")+'<div style="font-size:13px;color:#6b4e0a">في '+lowStock+' صنف الكمية فيه وصلت 2 أو أقل — راجع المخزون</div></div>' : '') +
+    financeBlock +
     '<div class="card" style="margin-bottom:14px">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
         '<span style="font-weight:700;color:var(--navy);font-size:13.5px">آخر نشاط</span>' +
@@ -1177,7 +1259,12 @@ function renderAccounts(){
    ========================================================= */
 function filteredExpenses(){
   const q = state.expenseQuery.toLowerCase();
-  return state.expenses.filter(x => !q || (x.category||"").toLowerCase().includes(q) || (x.notes||"").toLowerCase().includes(q));
+  const hasRange = state.expenseFrom || state.expenseTo;
+  return state.expenses.filter(x => {
+    const matchQ = !q || (x.category||"").toLowerCase().includes(q) || (x.notes||"").toLowerCase().includes(q);
+    const matchRange = !hasRange || inDateRange(x.date, state.expenseFrom, state.expenseTo);
+    return matchQ && matchRange;
+  });
 }
 function expenseMonthGroups(){
   const list = filteredExpenses();
@@ -1197,7 +1284,7 @@ function expensesListHtml(){
   const groups = expenseMonthGroups();
   if (groups.length === 0){
     return '<div class="empty">'+icon("receipt",34,"var(--line)")+'<div style="margin-top:10px;font-size:14px">'+
-      (state.expenses.length===0 ? "لسه مفيش مصروفات مسجلة — ابدأ بإضافة أول مصروف" : "مفيش نتائج مطابقة")+'</div></div>';
+      (state.expenses.length===0 ? "لسه مفيش مصروفات مسجلة — ابدأ بإضافة أول مصروف" : "مفيش نتائج مطابقة للفترة أو البحث ده")+'</div></div>';
   }
   return groups.map(g => {
     const subtotal = g.items.reduce((sum,x) => sum + (Number(x.amount)||0), 0);
@@ -1233,15 +1320,21 @@ function expensesListHtml(){
     return '<div style="margin-bottom:20px">' + header + '<div style="display:flex;flex-direction:column;gap:10px">' + cards + '</div></div>';
   }).join("");
 }
-function renderExpenses(){
-  const total = state.expenses.reduce((sum,x) => sum + (Number(x.amount)||0), 0);
-  return pageHeader("receipt","المصروفات", state.expenses.length+" مصروف مسجل",
-      '<button class="btn-add" id="btnAddExpense">'+icon("plus",16)+' مصروف جديد</button>') +
-    (state.expenses.length>0 ? '<div class="card" style="background:var(--navy);border:none;margin-bottom:16px"><div style="color:var(--gold-soft);font-size:13px">إجمالي المصروفات (كل الشهور)</div><div style="color:#fff;font-size:22px;font-weight:700;margin-top:2px">'+total+' ج.م</div></div>' : '') +
+function expensesContentHtml(){
+  const filtered = filteredExpenses();
+  const total = filtered.reduce((sum,x) => sum + (Number(x.amount)||0), 0);
+  const hasRange = state.expenseFrom || state.expenseTo;
+  return (state.expenses.length>0 ? '<div class="card" style="background:var(--navy);border:none;margin-bottom:16px"><div style="color:var(--gold-soft);font-size:13px">'+(hasRange?"إجمالي مصروفات الفترة المحددة":"إجمالي المصروفات (كل الفترة)")+'</div><div style="color:#fff;font-size:22px;font-weight:700;margin-top:2px">'+total+' ج.م</div></div>' : '') +
+    dateRangeHtml("exp", state.expenseFrom, state.expenseTo) +
     '<div style="position:relative;margin-bottom:16px">' +
       '<span style="position:absolute;right:12px;top:12px">'+icon("search",15,"var(--ink-soft)")+'</span>' +
       '<input class="input" style="padding-right:36px" id="expenseSearch" placeholder="ابحث بنوع المصروف أو ملاحظة" value="'+esc(state.expenseQuery)+'"/></div>' +
     '<div id="expenseList">' + expensesListHtml() + '</div>';
+}
+function renderExpenses(){
+  return pageHeader("receipt","المصروفات", state.expenses.length+" مصروف مسجل",
+      '<button class="btn-add" id="btnAddExpense">'+icon("plus",16)+' مصروف جديد</button>') +
+    '<div id="expensesContent">' + expensesContentHtml() + '</div>';
 }
 
 /* =========================================================
@@ -1288,15 +1381,14 @@ function renderPackages(){
 /* =========================================================
    Profits (الأرباح) — computed, read-only
    ========================================================= */
-function renderProfits(){
-  if (!state.salesLoaded || !state.rentalsLoaded || !state.expensesLoaded || !state.accountsLoaded){
-    return pageHeader("trending","الأرباح","تقدير سريع لأرباح المحل") +
-      '<div class="empty">'+icon("cloud",30,"var(--line)")+'<div style="margin-top:10px;font-size:14px">جاري تحميل البيانات من السحابة...</div></div>';
-  }
-  const salesRevenue = state.sales.reduce((sum,s) => sum + (Number(s.total)||0), 0);
-  const rentalRevenue = state.rentals.reduce((sum,r) => sum + (Number(r.price)||0), 0);
-  const totalExpenses = state.expenses.reduce((sum,x) => sum + (Number(x.amount)||0), 0);
-  const supplierPurchases = state.accountEntries.filter(e => e.type==="purchase").reduce((sum,e) => sum + (Number(e.amount)||0), 0);
+function profitsContentHtml(){
+  const from = state.profitsFrom, to = state.profitsTo;
+  const hasRange = from || to;
+  const inRange = (d) => !hasRange || inDateRange(d, from, to);
+  const salesRevenue = state.sales.filter(s => inRange(s.date)).reduce((sum,s) => sum + (Number(s.total)||0), 0);
+  const rentalRevenue = state.rentals.filter(r => inRange(r.rentDate)).reduce((sum,r) => sum + (Number(r.price)||0), 0);
+  const totalExpenses = state.expenses.filter(x => inRange(x.date)).reduce((sum,x) => sum + (Number(x.amount)||0), 0);
+  const supplierPurchases = state.accountEntries.filter(e => e.type==="purchase" && inRange(e.date)).reduce((sum,e) => sum + (Number(e.amount)||0), 0);
   const totalRevenue = salesRevenue + rentalRevenue;
   const totalCosts = totalExpenses + supplierPurchases;
   const net = totalRevenue - totalCosts;
@@ -1313,34 +1405,50 @@ function renderProfits(){
       '<div style="font-size:19px;font-weight:700;color:var(--navy)">'+c.value+' <span style="font-size:11px;font-weight:400;color:var(--ink-soft)">ج.م</span></div>' +
       '<div style="font-size:12px;color:var(--ink-soft);margin-top:2px">'+c.label+'</div></div>';
   });
-  return pageHeader("trending","الأرباح","تقدير سريع لأرباح المحل") +
+  return dateRangeHtml("prof", from, to) +
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px">'+cardsHtml+'</div>' +
     '<div class="card" style="background:var(--navy);border:none;margin-bottom:16px;padding:20px">' +
-      '<div style="color:var(--gold-soft);font-size:13px;margin-bottom:4px">صافي الربح التقديري</div>' +
+      '<div style="color:var(--gold-soft);font-size:13px;margin-bottom:4px">صافي الربح التقديري'+(hasRange?" للفترة المحددة":"")+'</div>' +
       '<div style="color:'+(net>=0?"#7CD992":"#F0A0A0")+';font-size:28px;font-weight:700">'+net+' ج.م</div>' +
     '</div>' +
     '<div style="font-size:12px;color:var(--ink-soft);background:var(--cream);border-radius:8px;padding:10px 12px">' +
-      'ده رقم تقديري بيحسب: (إيرادات المبيعات + إيرادات الإيجار) − (المصروفات + المشتريات من الموردين). مبياخدش في الاعتبار حاجات زي التأمينات المستردة أو تعديلات يدوية.' +
+      'ده رقم تقديري بيحسب: (إيرادات المبيعات + إيرادات الإيجار) − (المصروفات + المشتريات من الموردين) لنفس الفترة المحددة. مبياخدش في الاعتبار حاجات زي التأمينات المستردة أو تعديلات يدوية.' +
     '</div>';
+}
+function renderProfits(){
+  if (!state.salesLoaded || !state.rentalsLoaded || !state.expensesLoaded || !state.accountsLoaded){
+    return pageHeader("trending","الأرباح","تقدير الأرباح لفترة محددة") +
+      '<div class="empty">'+icon("cloud",30,"var(--line)")+'<div style="margin-top:10px;font-size:14px">جاري تحميل البيانات من السحابة...</div></div>';
+  }
+  return pageHeader("trending","الأرباح","تقدير الأرباح لفترة محددة") +
+    '<div id="profitsContent">' + profitsContentHtml() + '</div>';
 }
 
 /* =========================================================
    Reports (التقارير) — computed, read-only
    ========================================================= */
-function renderReports(){
-  if (!state.invLoaded || !state.custLoaded || !state.rentalsLoaded || !state.salesLoaded || !state.tailorLoaded){
-    return pageHeader("report","التقارير","ملخص شامل لنشاط المحل") +
-      '<div class="empty">'+icon("cloud",30,"var(--line)")+'<div style="margin-top:10px;font-size:14px">جاري تحميل البيانات من السحابة...</div></div>';
-  }
+function reportsContentHtml(){
+  const from = state.reportsFrom, to = state.reportsTo;
+  const hasRange = from || to;
+  const inRange = (d) => !hasRange || inDateRange(d, from, to);
+
   const activeRentals = state.rentals.filter(r => r.status==="active" || r.status==="late").length;
   const lateRentals = state.rentals.filter(r => r.status==="late").length;
   const pendingTailor = state.tailorOrders.filter(t => t.status==="pending").length;
   const readyTailor = state.tailorOrders.filter(t => t.status==="ready").length;
   const lowStockItems = state.inventory.filter(i => availableQtyOf(i) <= 2);
 
-  // top rented items
+  // period revenue/expense summary (respects the date range picker)
+  const rentalsInRange = state.rentals.filter(r => inRange(r.rentDate));
+  const salesInRange = state.sales.filter(s => inRange(s.date));
+  const expensesInRange = state.expenses.filter(x => inRange(x.date));
+  const periodRevenue = salesInRange.reduce((sum,s) => sum+(Number(s.total)||0),0) + rentalsInRange.reduce((sum,r) => sum+(Number(r.price)||0),0);
+  const periodExpenses = expensesInRange.reduce((sum,x) => sum+(Number(x.amount)||0),0);
+  const periodNet = periodRevenue - periodExpenses;
+
+  // top rented items (respects the date range picker)
   const rentCount = {};
-  state.rentals.forEach(r => { const k = r.itemDesc || "—"; rentCount[k] = (rentCount[k]||0) + 1; });
+  rentalsInRange.forEach(r => { const k = r.itemDesc || "—"; rentCount[k] = (rentCount[k]||0) + 1; });
   const topRented = Object.keys(rentCount).sort((a,b) => rentCount[b]-rentCount[a]).slice(0,5);
 
   const statCards = [
@@ -1357,7 +1465,7 @@ function renderReports(){
       '<div style="font-size:12px;color:var(--ink-soft);margin-top:2px">'+c.label+'</div></div>';
   });
 
-  const topRentedHtml = topRented.length === 0 ? '<div style="font-size:12.5px;color:var(--ink-soft)">لسه مفيش بيانات كفاية</div>' :
+  const topRentedHtml = topRented.length === 0 ? '<div style="font-size:12.5px;color:var(--ink-soft)">لسه مفيش بيانات كفاية في الفترة دي</div>' :
     topRented.map(function(k,idx){
       return '<div style="display:flex;justify-content:space-between;padding:8px 0;'+(idx<topRented.length-1?'border-bottom:1px solid var(--line)':'')+'">' +
         '<span style="font-size:13px;color:var(--ink)">'+esc(k)+'</span>' +
@@ -1373,7 +1481,7 @@ function renderReports(){
       '</div>';
     }).join("");
 
-  // monthly report: revenue vs expenses per calendar month
+  // monthly report: revenue vs expenses per calendar month (always shows all months, independent of range picker)
   const monthKeys = new Set();
   state.sales.forEach(s => { if (s.date) monthKeys.add(monthKeyOf(s.date)); });
   state.rentals.forEach(r => { if (r.rentDate) monthKeys.add(monthKeyOf(r.rentDate)); });
@@ -1397,10 +1505,16 @@ function renderReports(){
       '</div>';
     }).join("");
 
-  return pageHeader("report","التقارير","ملخص شامل لنشاط المحل") +
-    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px">'+statsHtml+'</div>' +
+  return dateRangeHtml("rep", from, to) +
+    (isAdmin() ? '<div class="card" style="background:var(--navy);border:none;margin-bottom:16px;padding:16px 18px">' +
+      '<div style="color:var(--gold-soft);font-size:13px;margin-bottom:8px">ملخص الفترة المحددة'+(!hasRange?" (كل الفترة)":"")+'</div>' +
+      '<div style="display:flex;justify-content:space-between;font-size:12.5px;color:rgba(255,255,255,0.75);margin-bottom:4px"><span>إيرادات</span><span>'+periodRevenue+' ج.م</span></div>' +
+      '<div style="display:flex;justify-content:space-between;font-size:12.5px;color:rgba(255,255,255,0.75);margin-bottom:8px"><span>مصروفات</span><span>'+periodExpenses+' ج.م</span></div>' +
+      '<div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700;padding-top:8px;border-top:1px solid rgba(255,255,255,0.12)"><span style="color:#fff">صافي الفترة</span><span style="color:'+(periodNet>=0?"#7CD992":"#F0A0A0")+'">'+periodNet+' ج.م</span></div>' +
+    '</div>' : '') +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px">'+statsHtml+'</div>' +
     '<div class="card" style="margin-bottom:16px">' +
-      '<div style="font-weight:700;color:var(--navy);font-size:14px;margin-bottom:10px">أكتر الأصناف تأجيراً</div>' +
+      '<div style="font-weight:700;color:var(--navy);font-size:14px;margin-bottom:10px">أكتر الأصناف تأجيراً'+(hasRange?" في الفترة دي":"")+'</div>' +
       topRentedHtml +
     '</div>' +
     '<div class="card" style="margin-bottom:16px">' +
@@ -1411,6 +1525,14 @@ function renderReports(){
       '<div style="font-weight:700;color:var(--navy);font-size:14px;margin-bottom:10px">التقرير الشهري</div>' +
       monthlyHtml +
     '</div>';
+}
+function renderReports(){
+  if (!state.invLoaded || !state.custLoaded || !state.rentalsLoaded || !state.salesLoaded || !state.tailorLoaded){
+    return pageHeader("report","التقارير","ملخص شامل لنشاط المحل") +
+      '<div class="empty">'+icon("cloud",30,"var(--line)")+'<div style="margin-top:10px;font-size:14px">جاري تحميل البيانات من السحابة...</div></div>';
+  }
+  return pageHeader("report","التقارير","ملخص شامل لنشاط المحل") +
+    '<div id="reportsContent">' + reportsContentHtml() + '</div>';
 }
 
 /* =========================================================
@@ -1709,15 +1831,39 @@ function renderTailorModal(t){
 }
 
 /* ---- users modal ---- */
+function permsCheckboxesHtml(idPrefix, permsObj){
+  return PERMISSION_MODULES.map(function(m){
+    const checked = permsObj[m.key] !== false;
+    return '<label style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line);font-size:13px;color:var(--ink)">' +
+      '<input type="checkbox" class="'+idPrefix+'-perm" data-key="'+m.key+'" '+(checked?"checked":"")+' style="width:17px;height:17px;flex-shrink:0"/>' +
+      '<span>'+m.label+'</span>' +
+    '</label>';
+  }).join("");
+}
 function renderUsersModal(){
   const users = state.usersCache;
   const showAdd = state.modal && state.modal.showAdd;
+  const editUserId = state.modal && state.modal.editUserId;
   let rows = users.map(u => {
-    return '<div class="row" style="padding:10px 12px;border:1px solid var(--line);border-radius:10px">' +
-      '<div style="width:32px;height:32px;border-radius:50%;background:var(--navy);color:var(--gold-soft);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0">'+esc(u.username[0])+'</div>' +
-      '<div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:600;color:var(--navy)">'+esc(u.username)+(u.username===state.username?" (أنت)":"")+'</div>' +
-      '<div style="font-size:11.5px;color:var(--ink-soft)">'+(u.role==="admin"?"أدمن":"موظف")+'</div></div>' +
-      (users.length>1 ? '<button class="btn-icon" data-del-user="'+u.id+'">'+icon("trash",14,"var(--red)")+'</button>' : '') +
+    const isEditing = editUserId === u.id;
+    const permsEditor = (isEditing && u.role !== "admin") ? (
+      '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">' +
+        '<div style="font-size:12px;color:var(--ink-soft);margin-bottom:6px">حدد الأجزاء اللي "'+esc(u.username)+'" يقدر يدخلها:</div>' +
+        permsCheckboxesHtml("eu", userPermissions(u)) +
+        '<div style="display:flex;gap:8px;margin-top:10px">' +
+          '<button class="btn-secondary" data-cancel-perms="1" style="font-size:13px">إلغاء</button>' +
+          '<button class="btn-primary" data-save-perms="'+u.id+'" style="font-size:13px">حفظ الصلاحيات</button>' +
+        '</div>' +
+      '</div>'
+    ) : '';
+    return '<div style="padding:10px 12px;border:1px solid var(--line);border-radius:10px">' +
+      '<div class="row">' +
+        '<div style="width:32px;height:32px;border-radius:50%;background:var(--navy);color:var(--gold-soft);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0">'+esc(u.username[0])+'</div>' +
+        '<div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:600;color:var(--navy)">'+esc(u.username)+(u.username===state.username?" (أنت)":"")+'</div>' +
+        '<div style="font-size:11.5px;color:var(--ink-soft)">'+(u.role==="admin"?"أدمن — كل الصلاحيات":"موظف")+'</div></div>' +
+        (u.role !== "admin" ? '<button class="btn-icon" data-toggle-perms="'+u.id+'" title="الصلاحيات">'+icon("wallet",14,"var(--navy)")+'</button>' : '') +
+        (users.length>1 ? '<button class="btn-icon" data-del-user="'+u.id+'">'+icon("trash",14,"var(--red)")+'</button>' : '') +
+      '</div>' + permsEditor +
     '</div>';
   }).join('<div style="height:10px"></div>');
 
@@ -1725,6 +1871,7 @@ function renderUsersModal(){
     '<div style="border:1px solid var(--line);border-radius:10px;padding:12px;margin-top:12px">' +
       '<div class="field"><label class="label">اسم المستخدم الجديد</label><input class="input" id="nu_name"/></div>' +
       '<div class="field"><label class="label">كلمة السر</label><input class="input" id="nu_pin" type="password" inputmode="numeric"/></div>' +
+      '<div class="field"><label class="label">الصلاحيات</label>' + permsCheckboxesHtml("nu", defaultPermissions()) + '</div>' +
       '<div id="nu_err" class="err" style="display:none"></div>' +
       '<div style="display:flex;gap:8px">' +
         '<button class="btn-secondary" id="nu_cancel">إلغاء</button>' +
@@ -1732,7 +1879,7 @@ function renderUsersModal(){
       '</div></div>'
   ) : '<button class="btn-add" id="nu_show" style="justify-content:center;width:100%;margin-top:12px">'+icon("plus",16)+' إضافة مستخدم جديد</button>';
 
-  return modalShellHtml("إدارة المستخدمين", '<div>' + (rows || '<div style="color:var(--ink-soft);font-size:13px;text-align:center;padding:10px">جاري التحميل...</div>') + addBlock + '</div>');
+  return modalShellHtml("إدارة المستخدمين والصلاحيات", '<div>' + (rows || '<div style="color:var(--ink-soft);font-size:13px;text-align:center;padding:10px">جاري التحميل...</div>') + addBlock + '</div>');
 }
 
 async function openUsersModal(){
@@ -1760,8 +1907,9 @@ function bindShellEvents(){
   document.querySelectorAll(".navitem").forEach(btn => {
     btn.addEventListener("click", () => { state.view = btn.getAttribute("data-view"); state.mobileOpen = false; render(); });
   });
-  document.getElementById("btnUsers").addEventListener("click", () => openUsersModal());
-  document.getElementById("btnLogout").addEventListener("click", () => { state.authed = false; state.modal = null; boot(); });
+  const btnUsersEl = document.getElementById("btnUsers");
+  if (btnUsersEl) btnUsersEl.addEventListener("click", () => openUsersModal());
+  document.getElementById("btnLogout").addEventListener("click", () => { state.authed = false; state.userRole = ""; state.userPermissions = null; state.modal = null; boot(); });
 
   document.querySelectorAll("[data-view]").forEach(el => {
     if (el.classList.contains("navitem")) return;
@@ -1778,6 +1926,8 @@ function bindShellEvents(){
   if (state.view === "expenses") bindExpensesEvents();
   if (state.view === "packages") bindPackagesEvents();
   if (state.view === "dashboard") bindDashboardEvents();
+  if (state.view === "profits") bindProfitsEvents();
+  if (state.view === "reports") bindReportsEvents();
 }
 
 function bindInventoryEvents(){
@@ -2030,8 +2180,18 @@ function bindAccountsListEvents(){
 function bindExpensesEvents(){
   const addBtn = document.getElementById("btnAddExpense");
   if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"expense", data:{ id:uid(), category:EXPENSE_CATEGORIES[0], amount:"", date:todayStr(), notes:"" } }));
+  bindExpensesContentEvents();
+}
+function refreshExpensesContent(){
+  const host = document.getElementById("expensesContent");
+  if (!host) return;
+  host.innerHTML = expensesContentHtml();
+  bindExpensesContentEvents();
+}
+function bindExpensesContentEvents(){
   const search = document.getElementById("expenseSearch");
-  if (search) search.addEventListener("input", () => { state.expenseQuery = search.value; refreshExpensesList(); });
+  if (search) search.addEventListener("input", () => { state.expenseQuery = search.value; refreshExpensesContent(); });
+  bindDateRangeEvents("exp", (from,to) => { state.expenseFrom = from; state.expenseTo = to; }, refreshExpensesContent);
   bindExpensesListEvents();
 }
 function refreshExpensesList(){
@@ -2096,6 +2256,26 @@ function bindPackagesListEvents(){
       openModal({ type:"confirmDeletePackage", id: btn.getAttribute("data-del-package") });
     });
   });
+}
+
+function refreshProfitsContent(){
+  const host = document.getElementById("profitsContent");
+  if (!host) return;
+  host.innerHTML = profitsContentHtml();
+  bindProfitsEvents();
+}
+function bindProfitsEvents(){
+  bindDateRangeEvents("prof", (from,to) => { state.profitsFrom = from; state.profitsTo = to; }, refreshProfitsContent);
+}
+
+function refreshReportsContent(){
+  const host = document.getElementById("reportsContent");
+  if (!host) return;
+  host.innerHTML = reportsContentHtml();
+  bindReportsEvents();
+}
+function bindReportsEvents(){
+  bindDateRangeEvents("rep", (from,to) => { state.reportsFrom = from; state.reportsTo = to; }, refreshReportsContent);
 }
 
 /* ---- modal events ---- */
@@ -2713,11 +2893,13 @@ function bindModalEvents(){
     if (!name){ errEl.textContent = "اكتب اسم المستخدم"; errEl.style.display = "block"; return; }
     if (state.usersCache.some(u => u.username.trim().toLowerCase() === name.toLowerCase())){ errEl.textContent = "اسم المستخدم ده مستخدم قبل كده"; errEl.style.display = "block"; return; }
     if (pin.length < 4){ errEl.textContent = "كلمة السر لازم 4 أرقام على الأقل"; errEl.style.display = "block"; return; }
+    const permissions = {};
+    document.querySelectorAll(".nu-perm").forEach(cb => { permissions[cb.getAttribute("data-key")] = cb.checked; });
     nuAdd.disabled = true; nuAdd.textContent = "جاري الإضافة...";
     try {
       const newId = uid();
       const arr = await fsGetList("users");
-      arr.push({ id:newId, username:name, pin:pin, role:"staff" });
+      arr.push({ id:newId, username:name, pin:pin, role:"staff", permissions:permissions });
       await fsSaveList("users", arr);
     } catch(e){}
     await refreshUsersCache();
@@ -2726,6 +2908,36 @@ function bindModalEvents(){
   });
   document.querySelectorAll("[data-del-user]").forEach(btn => {
     btn.addEventListener("click", () => { openModal({ type:"confirmDeleteUser", id: btn.getAttribute("data-del-user") }); });
+  });
+  document.querySelectorAll("[data-toggle-perms]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-toggle-perms");
+      const current = state.modal.editUserId;
+      state.modal = { type:"users", editUserId: current === id ? null : id };
+      renderModalInto();
+    });
+  });
+  document.querySelectorAll("[data-cancel-perms]").forEach(btn => {
+    btn.addEventListener("click", () => { state.modal = { type:"users" }; renderModalInto(); });
+  });
+  document.querySelectorAll("[data-save-perms]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const id = btn.getAttribute("data-save-perms");
+      const permissions = {};
+      document.querySelectorAll(".eu-perm").forEach(cb => { permissions[cb.getAttribute("data-key")] = cb.checked; });
+      btn.disabled = true; btn.textContent = "جاري الحفظ...";
+      try {
+        const arr = await fsGetList("users");
+        const idx = arr.findIndex(u => u.id === id);
+        if (idx >= 0) arr[idx].permissions = permissions;
+        await fsSaveList("users", arr);
+        await refreshUsersCache();
+        const me = state.usersCache.find(u => u.username === state.username);
+        if (me && me.id === id) state.userPermissions = userPermissions(me);
+      } catch(e){}
+      state.modal = { type:"users" };
+      renderModalInto();
+    });
   });
 }
 
