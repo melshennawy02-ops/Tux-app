@@ -134,7 +134,11 @@ function fsDecodeDoc(doc){
 async function fsGetDoc(collection, id){
   const res = await fetch(FS_BASE + "/" + collection + "/" + id + "?key=" + API_KEY);
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error("fs get " + res.status);
+  if (!res.ok) {
+    let detail = "";
+    try { detail = (await res.json()).error.message; } catch(e2){}
+    throw new Error("fs get " + res.status + (detail ? " - " + detail : ""));
+  }
   return fsDecodeDoc(await res.json());
 }
 async function fsSetDoc(collection, id, data){
@@ -155,7 +159,11 @@ async function fsDeleteDoc(collection, id){
 }
 async function fsList(collection){
   const res = await fetch(FS_BASE + "/" + collection + "?key=" + API_KEY + "&pageSize=300");
-  if (!res.ok) throw new Error("fs list " + res.status);
+  if (!res.ok) {
+    let detail = "";
+    try { detail = (await res.json()).error.message; } catch(e2){}
+    throw new Error("fs list " + res.status + (detail ? " - " + detail : ""));
+  }
   const data = await res.json();
   const docs = data.documents || [];
   return docs.map(function (d) {
