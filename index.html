@@ -4,8 +4,6 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
 <title>TUX - نظام إدارة المحل (سحابي)</title>
-<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
 <style>
   :root{
     --navy:#0B0B0C; --navy-mid:#161616; --navy-light:#242422;
@@ -101,23 +99,68 @@
 "use strict";
 
 /* =========================================================
-   Firebase — shared cloud database (same data on every device)
+   Firestore over plain REST (no streaming/websocket layer —
+   works on restrictive mobile networks that block long-lived connections)
    ========================================================= */
-const firebaseConfig = {
-  apiKey: "AIzaSyD5nDjqJqNYwx99yciBzsL1527w3Z5XYis",
-  authDomain: "tux-stores.firebaseapp.com",
-  projectId: "tux-stores",
-  storageBucket: "tux-stores.firebasestorage.app",
-  messagingSenderId: "988486976918",
-  appId: "1:988486976918:web:987ed8a17ac581532589b7"
-};
-firebase.initializeApp(firebaseConfig);
-const db = firebase.firestore();
-db.settings({ experimentalAutoDetectLongPolling: true, useFetchStreams: false });
-const colShop = db.collection("config").doc("shop");
-const colUsers = db.collection("users");
-const colInventory = db.collection("inventory");
-const colCustomers = db.collection("customers");
+const PROJECT_ID = "tux-stores";
+const API_KEY = "AIzaSyD5nDjqJqNYwx99yciBzsL1527w3Z5XYis";
+const FS_BASE = "https://firestore.googleapis.com/v1/projects/" + PROJECT_ID + "/databases/(default)/documents";
+
+function fsEncodeValue(v){
+  if (typeof v === "number") {
+    return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
+  }
+  return { stringValue: v == null ? "" : String(v) };
+}
+function fsEncodeFields(obj){
+  const fields = {};
+  for (const k in obj) fields[k] = fsEncodeValue(obj[k]);
+  return { fields: fields };
+}
+function fsDecodeValue(v){
+  if (!v) return "";
+  if ("stringValue" in v) return v.stringValue;
+  if ("integerValue" in v) return Number(v.integerValue);
+  if ("doubleValue" in v) return Number(v.doubleValue);
+  if ("booleanValue" in v) return v.booleanValue;
+  return "";
+}
+function fsDecodeDoc(doc){
+  const obj = {};
+  const fields = doc.fields || {};
+  for (const k in fields) obj[k] = fsDecodeValue(fields[k]);
+  return obj;
+}
+async function fsGetDoc(collection, id){
+  const res = await fetch(FS_BASE + "/" + collection + "/" + id + "?key=" + API_KEY);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error("fs get " + res.status);
+  return fsDecodeDoc(await res.json());
+}
+async function fsSetDoc(collection, id, data){
+  const res = await fetch(FS_BASE + "/" + collection + "/" + id + "?key=" + API_KEY, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(fsEncodeFields(data)),
+  });
+  if (!res.ok) throw new Error("fs set " + res.status);
+}
+async function fsDeleteDoc(collection, id){
+  const res = await fetch(FS_BASE + "/" + collection + "/" + id + "?key=" + API_KEY, { method: "DELETE" });
+  if (!res.ok && res.status !== 404) throw new Error("fs delete " + res.status);
+}
+async function fsList(collection){
+  const res = await fetch(FS_BASE + "/" + collection + "?key=" + API_KEY + "&pageSize=300");
+  if (!res.ok) throw new Error("fs list " + res.status);
+  const data = await res.json();
+  const docs = data.documents || [];
+  return docs.map(function (d) {
+    const id = d.name.split("/").pop();
+    const obj = fsDecodeDoc(d);
+    obj.id = obj.id || id;
+    return obj;
+  });
+}
 
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
 function esc(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
@@ -246,10 +289,10 @@ function renderSyncBadge(){
 async function boot(){
   document.getElementById("app").innerHTML = '<div class="auth-wrap"><div style="color:rgba(255,255,255,0.7);text-align:center">' + icon("cloud",30,"var(--gold)") + '<div style="margin-top:10px">جاري الاتصال بالسحابة...</div></div></div>';
   try {
-    const doc = await colShop.get();
-    if (doc.exists){
+    const shop = await fsGetDoc("config", "shop");
+    if (shop){
       state.bootPhase = "login";
-      state.shopName = doc.data().shopName || "";
+      state.shopName = shop.shopName || "";
     } else {
       state.bootPhase = "setup";
     }
@@ -257,7 +300,7 @@ async function boot(){
   } catch (e){
     state.bootPhase = "error";
     state.online = false;
-    state.lastError = (e && (e.code || e.message)) ? (e.code || "") + " " + (e.message || "") : String(e);
+    state.lastError = (e && e.message) ? e.message : String(e);
   }
   render();
 }
@@ -322,8 +365,8 @@ function bindAuthEvents(){
       submitBtn.disabled = true; submitBtn.textContent = "جاري الإنشاء...";
       try {
         const firstUser = { id:uid(), username:username, pin:pin, role:"admin" };
-        await colShop.set({ shopName:shopName });
-        await colUsers.doc(firstUser.id).set(firstUser);
+        await fsSetDoc("config", "shop", { shopName:shopName });
+        await fsSetDoc("users", firstUser.id, firstUser);
         state.shopName = shopName; state.username = username; state.authed = true;
         afterLogin();
       } catch(err){
@@ -334,8 +377,7 @@ function bindAuthEvents(){
       if (!username) return showErr("اكتب اسم المستخدم");
       submitBtn.disabled = true; submitBtn.textContent = "جاري الدخول...";
       try {
-        const snap = await colUsers.get();
-        const users = snap.docs.map(d => d.data());
+        const users = await fsList("users");
         const match = users.find(u => u.username.trim().toLowerCase() === username.toLowerCase() && u.pin === pin);
         if (match){
           state.username = match.username; state.authed = true;
@@ -359,22 +401,30 @@ function afterLogin(){
 }
 
 /* =========================================================
-   realtime cloud subscriptions
+   cloud sync via polling (plain REST calls, no persistent
+   connection — refreshes every few seconds)
    ========================================================= */
+let pollTimer = null;
 function subscribeData(){
-  colInventory.onSnapshot(function(snap){
-    state.inventory = snap.docs.map(d => d.data()).sort((a,b) => (b._ts||0) - (a._ts||0));
+  pollOnce();
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(pollOnce, 4000);
+}
+async function pollOnce(){
+  try {
+    const [inv, cust] = await Promise.all([fsList("inventory"), fsList("customers")]);
+    inv.sort((a,b) => (b._ts||0) - (a._ts||0));
+    cust.sort((a,b) => (b._ts||0) - (a._ts||0));
+    state.inventory = inv;
+    state.customers = cust;
     state.invLoaded = true;
-    state.online = true;
-    onDataChanged();
-  }, function(err){ state.online = false; renderSyncBadge(); });
-
-  colCustomers.onSnapshot(function(snap){
-    state.customers = snap.docs.map(d => d.data()).sort((a,b) => (b._ts||0) - (a._ts||0));
     state.custLoaded = true;
     state.online = true;
     onDataChanged();
-  }, function(err){ state.online = false; renderSyncBadge(); });
+  } catch (e){
+    state.online = false;
+    renderSyncBadge();
+  }
 }
 
 function onDataChanged(){
@@ -710,15 +760,13 @@ function renderUsersModal(){
 async function openUsersModal(){
   openModal({ type:"users" });
   try {
-    const snap = await colUsers.get();
-    state.usersCache = snap.docs.map(d => d.data());
+    state.usersCache = await fsList("users");
   } catch(e){ state.usersCache = []; }
   if (state.modal && state.modal.type === "users") renderModalInto();
 }
 async function refreshUsersCache(){
   try {
-    const snap = await colUsers.get();
-    state.usersCache = snap.docs.map(d => d.data());
+    state.usersCache = await fsList("users");
   } catch(e){}
 }
 
@@ -844,8 +892,9 @@ function bindModalEvents(){
     mSave.disabled = true; mSave.textContent = "جاري الحفظ...";
     const item = { id, type, name, size, color, quantity:Number(quantity), price, status, _ts: Date.now() };
     try {
-      await colInventory.doc(id).set(item);
+      await fsSetDoc("inventory", id, item);
       closeModal();
+      pollOnce();
     } catch(err){
       mSave.disabled = false; mSave.textContent = "حفظ";
       errEl.textContent = "حصل خطأ في الحفظ، تأكد من الإنترنت"; errEl.style.display = "block";
@@ -865,8 +914,9 @@ function bindModalEvents(){
     mCSave.disabled = true; mCSave.textContent = "جاري الحفظ...";
     const c = { id, name, phone, measurements, notes, _ts: Date.now() };
     try {
-      await colCustomers.doc(id).set(c);
+      await fsSetDoc("customers", id, c);
       closeModal();
+      pollOnce();
     } catch(err){
       mCSave.disabled = false; mCSave.textContent = "حفظ";
       errEl.textContent = "حصل خطأ في الحفظ، تأكد من الإنترنت"; errEl.style.display = "block";
@@ -880,17 +930,19 @@ function bindModalEvents(){
   if (confirmYes && state.modal){
     if (state.modal.type === "confirmDeleteItem"){
       confirmYes.addEventListener("click", async () => {
-        await colInventory.doc(state.modal.id).delete();
+        await fsDeleteDoc("inventory", state.modal.id);
         closeModal();
+        pollOnce();
       });
     } else if (state.modal.type === "confirmDeleteCust"){
       confirmYes.addEventListener("click", async () => {
-        await colCustomers.doc(state.modal.id).delete();
+        await fsDeleteDoc("customers", state.modal.id);
         closeModal();
+        pollOnce();
       });
     } else if (state.modal.type === "confirmDeleteUser"){
       confirmYes.addEventListener("click", async () => {
-        await colUsers.doc(state.modal.id).delete();
+        await fsDeleteDoc("users", state.modal.id);
         await refreshUsersCache();
         state.modal = { type:"users" };
         renderModalInto();
@@ -913,7 +965,8 @@ function bindModalEvents(){
     if (pin.length < 4){ errEl.textContent = "كلمة السر لازم 4 أرقام على الأقل"; errEl.style.display = "block"; return; }
     nuAdd.disabled = true; nuAdd.textContent = "جاري الإضافة...";
     try {
-      await colUsers.doc(uid()).set({ id:uid(), username:name, pin:pin, role:"staff" });
+      const newId = uid();
+      await fsSetDoc("users", newId, { id:newId, username:name, pin:pin, role:"staff" });
     } catch(e){}
     await refreshUsersCache();
     state.modal = { type:"users" };
