@@ -951,11 +951,21 @@ function renderCustomerModal(c){
 }
 
 /* ---- rental modal ---- */
+function inventoryPickerOptions(selectedId){
+  let opts = '<option value=""'+(!selectedId?" selected":"")+'>-- اختار من المخزون (اختياري) --</option>';
+  state.inventory.forEach(it => {
+    const label = (it.type||"") + (it.name?" - "+it.name:"") + (it.size?" - مقاس "+it.size:"") + (it.color?" - "+it.color:"") + " (متاح "+it.quantity+")";
+    opts += '<option value="'+esc(it.id)+'"'+(selectedId===it.id?" selected":"")+'>'+esc(label)+'</option>';
+  });
+  return opts;
+}
+
 function renderRentalModal(r){
   let statusOpts = RENTAL_STATUS.map(s => '<option value="'+s.value+'"'+(r.status===s.value?" selected":"")+'>'+s.label+'</option>').join("");
   const body = '' +
     '<div style="display:flex;flex-direction:column;gap:12px">' +
       '<div><label class="label">اسم العميل</label><input class="input" id="m_rcust" value="'+esc(r.customerName)+'" placeholder="اسم العميل"/></div>' +
+      '<div><label class="label">اختار الصنف من المخزون</label><select class="input" id="m_ritemsel">'+inventoryPickerOptions(r.itemId)+'</select></div>' +
       '<div><label class="label">وصف الصنف المؤجر</label><input class="input" id="m_ritem" value="'+esc(r.itemDesc)+'" placeholder="مثال: بدلة كحلي مقاس 50"/></div>' +
       '<div style="display:flex;gap:10px">' +
         '<div style="flex:1"><label class="label">تاريخ الإيجار</label><input class="input" id="m_rrentdate" type="date" value="'+esc(r.rentDate)+'"/></div>' +
@@ -978,6 +988,7 @@ function renderSaleModal(s){
   const body = '' +
     '<div style="display:flex;flex-direction:column;gap:12px">' +
       '<div><label class="label">اسم العميل (اختياري)</label><input class="input" id="m_scust" value="'+esc(s.customerName)+'" placeholder="عميل مباشر"/></div>' +
+      '<div><label class="label">اختار الصنف من المخزون</label><select class="input" id="m_sitemsel">'+inventoryPickerOptions(s.itemId)+'</select></div>' +
       '<div><label class="label">وصف الصنف المباع</label><input class="input" id="m_sitem" value="'+esc(s.itemDesc)+'" placeholder="مثال: قميص أبيض مقاس L"/></div>' +
       '<div style="display:flex;gap:10px">' +
         '<div style="flex:1"><label class="label">الكمية</label><input class="input" id="m_sqty" type="number" min="1" value="'+esc(s.quantity||1)+'"/></div>' +
@@ -1148,7 +1159,7 @@ function bindCustomersListEvents(){
 
 function bindRentalEvents(){
   const addBtn = document.getElementById("btnAddRental");
-  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"rental", data:{ id:uid(), customerName:"", itemDesc:"", rentDate:"", dueDate:"", price:"", deposit:"", status:"active", notes:"" } }));
+  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"rental", data:{ id:uid(), customerName:"", itemId:"", itemDesc:"", rentDate:"", dueDate:"", price:"", deposit:"", status:"active", notes:"" } }));
   const search = document.getElementById("rentalSearch");
   if (search) search.addEventListener("input", () => { state.rentalQuery = search.value; refreshRentalList(); });
   bindRentalListEvents();
@@ -1184,7 +1195,7 @@ function bindRentalListEvents(){
 
 function bindSalesEvents(){
   const addBtn = document.getElementById("btnAddSale");
-  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"sale", data:{ id:uid(), customerName:"", itemDesc:"", quantity:1, unitPrice:"", total:"", date:"", notes:"" } }));
+  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"sale", data:{ id:uid(), customerName:"", itemId:"", itemDesc:"", quantity:1, unitPrice:"", total:"", date:"", notes:"" } }));
   const search = document.getElementById("salesSearch");
   if (search) search.addEventListener("input", () => { state.salesQuery = search.value; refreshSalesList(); });
   bindSalesListEvents();
@@ -1259,6 +1270,28 @@ function bindModalEvents(){
     confirmBackdrop.addEventListener("click", (e) => { if (e.target === confirmBackdrop){ closeModal(); } });
   }
 
+  // item pickers (rental & sale) — auto-fill description and price from inventory
+  const rItemSel = document.getElementById("m_ritemsel");
+  if (rItemSel) rItemSel.addEventListener("change", () => {
+    const it = state.inventory.find(x => x.id === rItemSel.value);
+    if (it){
+      const descEl = document.getElementById("m_ritem");
+      const priceEl = document.getElementById("m_rprice");
+      if (descEl && !descEl.value.trim()) descEl.value = (it.type||"") + (it.name?" - "+it.name:"") + (it.size?" مقاس "+it.size:"");
+      if (priceEl && it.rentPrice) priceEl.value = it.rentPrice;
+    }
+  });
+  const sItemSel = document.getElementById("m_sitemsel");
+  if (sItemSel) sItemSel.addEventListener("change", () => {
+    const it = state.inventory.find(x => x.id === sItemSel.value);
+    if (it){
+      const descEl = document.getElementById("m_sitem");
+      const priceEl = document.getElementById("m_sprice");
+      if (descEl && !descEl.value.trim()) descEl.value = (it.type||"") + (it.name?" - "+it.name:"") + (it.size?" مقاس "+it.size:"");
+      if (priceEl && it.salePrice) priceEl.value = it.salePrice;
+    }
+  });
+
   // item save
   const mSave = document.getElementById("m_save");
   if (mSave) mSave.addEventListener("click", async () => {
@@ -1319,6 +1352,7 @@ function bindModalEvents(){
   if (mRSave) mRSave.addEventListener("click", async () => {
     const id = document.getElementById("m_rid").value;
     const customerName = document.getElementById("m_rcust").value.trim();
+    const itemId = document.getElementById("m_ritemsel").value;
     const itemDesc = document.getElementById("m_ritem").value.trim();
     const rentDate = document.getElementById("m_rrentdate").value;
     const dueDate = document.getElementById("m_rduedate").value;
@@ -1330,12 +1364,22 @@ function bindModalEvents(){
     if (!customerName){ errEl.textContent = "اكتب اسم العميل"; errEl.style.display = "block"; return; }
     if (!itemDesc){ errEl.textContent = "اكتب وصف الصنف المؤجر"; errEl.style.display = "block"; return; }
     mRSave.disabled = true; mRSave.textContent = "جاري الحفظ...";
-    const r = { id, customerName, itemDesc, rentDate, dueDate, price, deposit, status, notes, _ts: Date.now() };
+    const r = { id, customerName, itemId, itemDesc, rentDate, dueDate, price, deposit, status, notes, _ts: Date.now() };
     try {
       const arr = await fsGetList("rentals");
       const idx = arr.findIndex(x => x.id === id);
       if (idx >= 0) arr[idx] = r; else arr.unshift(r);
       await fsSaveList("rentals", arr);
+      if (itemId){
+        try {
+          const inv = await fsGetList("inventory");
+          const invIdx = inv.findIndex(x => x.id === itemId);
+          if (invIdx >= 0){
+            inv[invIdx].status = (status === "returned") ? "available" : "rented";
+            await fsSaveList("inventory", inv);
+          }
+        } catch(e2){}
+      }
       closeModal();
       pollOnce();
     } catch(err){
@@ -1349,6 +1393,7 @@ function bindModalEvents(){
   if (mSSave) mSSave.addEventListener("click", async () => {
     const id = document.getElementById("m_sid").value;
     const customerName = document.getElementById("m_scust").value.trim();
+    const itemId = document.getElementById("m_sitemsel").value;
     const itemDesc = document.getElementById("m_sitem").value.trim();
     const quantity = document.getElementById("m_sqty").value;
     const unitPrice = document.getElementById("m_sprice").value;
@@ -1359,12 +1404,23 @@ function bindModalEvents(){
     if (!quantity || Number(quantity) <= 0){ errEl.textContent = "حدد الكمية"; errEl.style.display = "block"; return; }
     mSSave.disabled = true; mSSave.textContent = "جاري الحفظ...";
     const total = (Number(quantity)||0) * (Number(unitPrice)||0);
-    const s = { id, customerName, itemDesc, quantity:Number(quantity), unitPrice, total, date, notes, _ts: Date.now() };
+    const isNew = !state.sales.some(x => x.id === id);
+    const s = { id, customerName, itemId, itemDesc, quantity:Number(quantity), unitPrice, total, date, notes, _ts: Date.now() };
     try {
       const arr = await fsGetList("sales");
       const idx = arr.findIndex(x => x.id === id);
       if (idx >= 0) arr[idx] = s; else arr.unshift(s);
       await fsSaveList("sales", arr);
+      if (itemId && isNew){
+        try {
+          const inv = await fsGetList("inventory");
+          const invIdx = inv.findIndex(x => x.id === itemId);
+          if (invIdx >= 0){
+            inv[invIdx].quantity = Math.max(0, Number(inv[invIdx].quantity||0) - Number(quantity));
+            await fsSaveList("inventory", inv);
+          }
+        } catch(e2){}
+      }
       closeModal();
       pollOnce();
     } catch(err){
