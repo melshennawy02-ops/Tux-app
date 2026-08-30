@@ -113,6 +113,7 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
+db.settings({ experimentalAutoDetectLongPolling: true, useFetchStreams: false });
 const colShop = db.collection("config").doc("shop");
 const colUsers = db.collection("users");
 const colInventory = db.collection("inventory");
@@ -256,6 +257,7 @@ async function boot(){
   } catch (e){
     state.bootPhase = "error";
     state.online = false;
+    state.lastError = (e && (e.code || e.message)) ? (e.code || "") + " " + (e.message || "") : String(e);
   }
   render();
 }
@@ -269,6 +271,7 @@ function renderAuth(){
       icon("warn",34,"var(--red)") +
       '<h2 style="margin-top:10px;font-size:17px;color:var(--navy)">مش قادر أوصل للسحابة</h2>' +
       '<p style="color:var(--ink-soft);font-size:13px;margin-top:6px">تأكد إن الإنترنت شغال وحاول تاني</p>' +
+      (state.lastError ? '<p style="color:#b48a00;font-size:11px;margin-top:10px;direction:ltr;word-break:break-all">'+esc(state.lastError)+'</p>' : '') +
       '<button class="btn-primary" id="retryBoot" style="margin-top:16px">حاول تاني</button>' +
     '</div></div>';
   }
