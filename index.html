@@ -283,6 +283,14 @@ function chipsHtml(options, targetId){
     esc(o) + '</button>'
   ).join("");
 }
+function toggleChipHtml(val, group, selected){
+  return '<button type="button" class="chip-toggle" data-group="'+group+'" data-val="'+esc(val)+'" data-selected="'+(selected?"1":"0")+'" ' +
+    'style="padding:6px 13px;border-radius:20px;border:1px solid '+(selected?"var(--navy)":"var(--line)")+';background:'+(selected?"var(--navy)":"#fff")+';font-size:12.5px;color:'+(selected?"var(--gold-soft)":"var(--navy)")+';cursor:pointer;font-weight:'+(selected?"700":"400")+'">' +
+    esc(val) + '</button>';
+}
+function toggleChipsHtml(options, group, selectedSet){
+  return options.map(o => toggleChipHtml(o, group, selectedSet && selectedSet.has(o))).join("");
+}
 const STATUS_OPTIONS = [
   { value:"available", label:"متاحة", color:"var(--green)", bg:"var(--green-bg)" },
   { value:"rented", label:"مؤجرة", color:"var(--amber)", bg:"var(--amber-bg)" },
@@ -689,7 +697,8 @@ function renderInventory(){
   let typeOptions = '<option>الكل</option>';
   distinctTypes().forEach(t => typeOptions += '<option'+(state.invType===t?" selected":"")+'>'+t+'</option>');
   return pageHeader("package","المخزون", state.inventory.length+" صنف مسجل",
-      '<button class="btn-add" id="btnAddItem">'+icon("plus",16)+' إضافة صنف</button>') +
+      '<button class="btn-add" id="btnAddItem">'+icon("plus",16)+' صنف واحد</button>') +
+    '<button class="btn-add" id="btnBulkAddItem" style="justify-content:center;width:100%;margin-bottom:16px;background:var(--gold);color:var(--navy)">'+icon("plus",16)+' إضافة دفعة ألوان ومقاسات دفعة واحدة</button>' +
     '<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">' +
       '<div style="position:relative;flex:1 1 200px">' +
         '<span style="position:absolute;right:12px;top:12px">'+icon("search",15,"var(--ink-soft)")+'</span>'+
@@ -930,6 +939,7 @@ function renderModalInto(){
   if (!m){ host.innerHTML = ""; return; }
 
   if (m.type === "item") host.innerHTML = renderItemModal(m.data);
+  else if (m.type === "bulkItem") host.innerHTML = renderBulkItemModal();
   else if (m.type === "customer") host.innerHTML = renderCustomerModal(m.data);
   else if (m.type === "rental") host.innerHTML = renderRentalModal(m.data);
   else if (m.type === "sale") host.innerHTML = renderSaleModal(m.data);
@@ -946,6 +956,43 @@ function renderModalInto(){
 }
 
 /* ---- item modal ---- */
+/* ---- bulk item modal (multiple colors x sizes at once) ---- */
+const bulkAdd = { colors: new Set(), sizes: new Set(), customSizes: [] };
+function resetBulkAdd(){ bulkAdd.colors = new Set(); bulkAdd.sizes = new Set(); bulkAdd.customSizes = []; }
+function bulkSizeOptions(typeText){
+  const preset = detectSizePreset(typeText) || [];
+  const extra = bulkAdd.customSizes.filter(s => preset.indexOf(s) === -1);
+  return preset.concat(extra);
+}
+function renderBulkItemModal(){
+  const body = '' +
+    '<div style="display:flex;flex-direction:column;gap:14px">' +
+      '<div><label class="label">نوع الصنف</label><input class="input" id="bm_type" placeholder="مثال: قميص كلاسيك"/></div>' +
+      '<div><label class="label">اسم / وصف مشترك (اختياري)</label><input class="input" id="bm_name" placeholder="مثال: قميص قطن كلاسيك"/></div>' +
+      '<div>' +
+        '<label class="label">اختار الألوان (تقدر تختار أكتر من واحد)</label>' +
+        '<div id="bm_colorChips" style="display:flex;flex-wrap:wrap;gap:7px">'+toggleChipsHtml(COLOR_PRESETS,"color",bulkAdd.colors)+'</div>' +
+      '</div>' +
+      '<div>' +
+        '<label class="label">اختار المقاسات</label>' +
+        '<div id="bm_sizeChips" style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:8px"></div>' +
+        '<div style="display:flex;gap:8px">' +
+          '<input class="input" id="bm_customsize" placeholder="مقاس إضافي غير موجود فوق" style="flex:1"/>' +
+          '<button type="button" class="btn-icon" id="bm_addsize" style="width:44px">'+icon("plus",16,"var(--navy)")+'</button>' +
+        '</div>' +
+      '</div>' +
+      '<div><label class="label">الكمية لكل مقاس ولون</label><input class="input" id="bm_qty" type="number" min="1" value="1"/></div>' +
+      '<div style="display:flex;gap:10px">' +
+        '<div style="flex:1"><label class="label">سعر الإيجار (اختياري)</label><input class="input" id="bm_rentprice" type="number" min="0" placeholder="ج.م"/></div>' +
+        '<div style="flex:1"><label class="label">سعر البيع (اختياري)</label><input class="input" id="bm_saleprice" type="number" min="0" placeholder="ج.م"/></div>' +
+      '</div>' +
+      '<div id="bm_preview" style="font-size:12.5px;color:var(--ink-soft);background:var(--cream);border-radius:8px;padding:10px 12px">اختار الألوان والمقاسات وهيبان هنا عدد الأصناف اللي هتتضاف</div>' +
+      '<div id="bm_err" class="err" style="display:none"></div>' +
+      '<button class="btn-primary" id="bm_save">إضافة كل الأصناف</button>' +
+    '</div>';
+  return modalShellHtml("إضافة دفعة ألوان ومقاسات", body);
+}
+
 function renderItemModal(item){
   let statusOpts = STATUS_OPTIONS.map(s => '<option value="'+s.value+'"'+(item.status===s.value?" selected":"")+'>'+s.label+'</option>').join("");
   const body = '' +
@@ -991,10 +1038,18 @@ function renderCustomerModal(c){
 /* ---- rental modal ---- */
 function inventoryPickerOptions(selectedId){
   let opts = '<option value=""'+(!selectedId?" selected":"")+'>-- اختار من المخزون (اختياري) --</option>';
-  state.inventory.forEach(it => {
+  const sorted = state.inventory.slice().sort((a,b) => {
+    const ta = (a.type||""), tb = (b.type||"");
+    if (ta !== tb) return ta < tb ? -1 : 1;
+    const ca = (a.color||""), cb = (b.color||"");
+    if (ca !== cb) return ca < cb ? -1 : 1;
+    const sa = (a.size||""), sb = (b.size||"");
+    return sa < sb ? -1 : (sa > sb ? 1 : 0);
+  });
+  sorted.forEach(it => {
     const avail = availableQtyOf(it);
     const label = (it.type||"") + (it.name?" - "+it.name:"") + (it.size?" - مقاس "+it.size:"") + (it.color?" - "+it.color:"") + " (متاح "+avail+")";
-    opts += '<option value="'+esc(it.id)+'"'+(selectedId===it.id?" selected":"")+'>'+esc(label)+'</option>';
+    opts += '<option value="'+esc(it.id)+'"'+(selectedId===it.id?" selected":"")+(avail<=0 && selectedId!==it.id?" disabled":"")+'>'+esc(label)+'</option>';
   });
   return opts;
 }
@@ -1131,6 +1186,9 @@ function bindShellEvents(){
 function bindInventoryEvents(){
   const addBtn = document.getElementById("btnAddItem");
   if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"item", data:{ id:uid(), type:"", name:"", size:"", color:"", quantity:1, rentPrice:"", salePrice:"", status:"available" } }));
+
+  const bulkBtn = document.getElementById("btnBulkAddItem");
+  if (bulkBtn) bulkBtn.addEventListener("click", () => { resetBulkAdd(); openModal({ type:"bulkItem" }); });
 
   const search = document.getElementById("invSearch");
   if (search) search.addEventListener("input", () => { state.invQuery = search.value; refreshInventoryList(); });
@@ -1328,6 +1386,88 @@ function bindModalEvents(){
       bindChips(box);
     }
   });
+
+  // bulk add modal (multiple colors x sizes at once)
+  if (document.getElementById("bm_save")){
+    function bmRefreshSizeChips(){
+      const typeVal = document.getElementById("bm_type").value;
+      const box = document.getElementById("bm_sizeChips");
+      box.innerHTML = toggleChipsHtml(bulkSizeOptions(typeVal), "size", bulkAdd.sizes);
+      bmBindToggles(box);
+    }
+    function bmRefreshPreview(){
+      const n = bulkAdd.colors.size * bulkAdd.sizes.size;
+      const qty = Number(document.getElementById("bm_qty").value) || 0;
+      const box = document.getElementById("bm_preview");
+      if (n === 0){
+        box.textContent = "اختار الألوان والمقاسات وهيبان هنا عدد الأصناف اللي هتتضاف";
+      } else {
+        box.innerHTML = "هيتضاف <b>"+n+"</b> صنف (كل صنف كمية "+qty+") — يعني إجمالي القطع: <b>"+(n*qty)+"</b>";
+      }
+    }
+    function bmBindToggles(root){
+      root.querySelectorAll(".chip-toggle").forEach(function(btn){
+        btn.addEventListener("click", function(){
+          const group = btn.getAttribute("data-group");
+          const val = btn.getAttribute("data-val");
+          const set = group === "color" ? bulkAdd.colors : bulkAdd.sizes;
+          const nowSelected = btn.getAttribute("data-selected") === "1";
+          if (nowSelected){ set.delete(val); btn.setAttribute("data-selected","0"); btn.style.background="#fff"; btn.style.color="var(--navy)"; btn.style.borderColor="var(--line)"; btn.style.fontWeight="400"; }
+          else { set.add(val); btn.setAttribute("data-selected","1"); btn.style.background="var(--navy)"; btn.style.color="var(--gold-soft)"; btn.style.borderColor="var(--navy)"; btn.style.fontWeight="700"; }
+          bmRefreshPreview();
+        });
+      });
+    }
+    bmRefreshSizeChips();
+    bmBindToggles(document.getElementById("bm_colorChips"));
+    bmBindToggles(document.getElementById("bm_sizeChips"));
+    bmRefreshPreview();
+
+    document.getElementById("bm_type").addEventListener("input", bmRefreshSizeChips);
+    document.getElementById("bm_qty").addEventListener("input", bmRefreshPreview);
+
+    document.getElementById("bm_addsize").addEventListener("click", function(){
+      const input = document.getElementById("bm_customsize");
+      const val = input.value.trim();
+      if (!val) return;
+      if (bulkAdd.customSizes.indexOf(val) === -1) bulkAdd.customSizes.push(val);
+      bulkAdd.sizes.add(val);
+      input.value = "";
+      bmRefreshSizeChips();
+      bmRefreshPreview();
+    });
+
+    document.getElementById("bm_save").addEventListener("click", async function(){
+      const saveBtn = document.getElementById("bm_save");
+      const errEl = document.getElementById("bm_err");
+      const type = document.getElementById("bm_type").value.trim();
+      const name = document.getElementById("bm_name").value.trim();
+      const qty = Number(document.getElementById("bm_qty").value);
+      const rentPrice = document.getElementById("bm_rentprice").value;
+      const salePrice = document.getElementById("bm_saleprice").value;
+      if (!type){ errEl.textContent = "اكتب نوع الصنف"; errEl.style.display = "block"; return; }
+      if (bulkAdd.colors.size === 0){ errEl.textContent = "اختار لون واحد على الأقل"; errEl.style.display = "block"; return; }
+      if (bulkAdd.sizes.size === 0){ errEl.textContent = "اختار مقاس واحد على الأقل"; errEl.style.display = "block"; return; }
+      if (!qty || qty < 1){ errEl.textContent = "حدد الكمية لكل صنف"; errEl.style.display = "block"; return; }
+      saveBtn.disabled = true; saveBtn.textContent = "جاري الإضافة...";
+      try {
+        const arr = await fsGetList("inventory");
+        let t = Date.now();
+        bulkAdd.colors.forEach(function(color){
+          bulkAdd.sizes.forEach(function(size){
+            t += 1;
+            arr.unshift({ id:uid(), type, name, size, color, quantity:qty, availableQty:qty, rentPrice, salePrice, status:"available", _ts:t });
+          });
+        });
+        await fsSaveList("inventory", arr);
+        closeModal();
+        pollOnce();
+      } catch(err){
+        saveBtn.disabled = false; saveBtn.textContent = "إضافة كل الأصناف";
+        errEl.textContent = "حصل خطأ في الحفظ، تأكد من الإنترنت"; errEl.style.display = "block";
+      }
+    });
+  }
 
   // item pickers (rental & sale) — auto-fill description and price from inventory
   const rItemSel = document.getElementById("m_ritemsel");
