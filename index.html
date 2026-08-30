@@ -606,9 +606,15 @@ function inventoryListHtml(){
   }).join("") + '</div>';
 }
 
+function distinctTypes(){
+  const set = {};
+  state.inventory.forEach(it => { if (it.type) set[it.type] = true; });
+  return Object.keys(set).sort();
+}
+
 function renderInventory(){
   let typeOptions = '<option>الكل</option>';
-  ITEM_TYPES.forEach(t => typeOptions += '<option'+(state.invType===t?" selected":"")+'>'+t+'</option>');
+  distinctTypes().forEach(t => typeOptions += '<option'+(state.invType===t?" selected":"")+'>'+t+'</option>');
   return pageHeader("package","المخزون", state.inventory.length+" صنف مسجل",
       '<button class="btn-add" id="btnAddItem">'+icon("plus",16)+' إضافة صنف</button>') +
     '<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">' +
@@ -716,11 +722,12 @@ function renderModalInto(){
 
 /* ---- item modal ---- */
 function renderItemModal(item){
-  let typeOpts = ITEM_TYPES.map(t => '<option'+(item.type===t?" selected":"")+'>'+t+'</option>').join("");
+  const suggestions = Array.from(new Set(ITEM_TYPES.concat(distinctTypes())));
+  let typeListOpts = suggestions.map(t => '<option value="'+esc(t)+'"></option>').join("");
   let statusOpts = STATUS_OPTIONS.map(s => '<option value="'+s.value+'"'+(item.status===s.value?" selected":"")+'>'+s.label+'</option>').join("");
   const body = '' +
     '<div style="display:flex;flex-direction:column;gap:12px">' +
-      '<div><label class="label">نوع الصنف</label><select class="input" id="m_type">'+typeOpts+'</select></div>' +
+      '<div><label class="label">نوع الصنف</label><input class="input" id="m_type" list="typeSuggestions" value="'+esc(item.type)+'" placeholder="مثال: بنطلون، كرافتة، برفان..."/><datalist id="typeSuggestions">'+typeListOpts+'</datalist></div>' +
       '<div><label class="label">اسم / وصف الصنف</label><input class="input" id="m_name" value="'+esc(item.name)+'" placeholder="مثال: بدلة كحلي كلاسيك"/></div>' +
       '<div style="display:flex;gap:10px">' +
         '<div style="flex:1"><label class="label">المقاس</label><input class="input" id="m_size" value="'+esc(item.size)+'" placeholder="50"/></div>' +
@@ -817,7 +824,7 @@ function bindShellEvents(){
 
 function bindInventoryEvents(){
   const addBtn = document.getElementById("btnAddItem");
-  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"item", data:{ id:uid(), type:ITEM_TYPES[0], name:"", size:"", color:"", quantity:1, price:"", status:"available" } }));
+  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"item", data:{ id:uid(), type:"", name:"", size:"", color:"", quantity:1, price:"", status:"available" } }));
 
   const search = document.getElementById("invSearch");
   if (search) search.addEventListener("input", () => { state.invQuery = search.value; refreshInventoryList(); });
@@ -900,7 +907,7 @@ function bindModalEvents(){
   const mSave = document.getElementById("m_save");
   if (mSave) mSave.addEventListener("click", async () => {
     const id = document.getElementById("m_id").value;
-    const type = document.getElementById("m_type").value;
+    const type = document.getElementById("m_type").value.trim();
     const name = document.getElementById("m_name").value.trim();
     const size = document.getElementById("m_size").value.trim();
     const color = document.getElementById("m_color").value.trim();
@@ -908,7 +915,7 @@ function bindModalEvents(){
     const price = document.getElementById("m_price").value;
     const status = document.getElementById("m_status").value;
     const errEl = document.getElementById("m_err");
-    if (!type){ errEl.textContent = "اختار نوع الصنف"; errEl.style.display = "block"; return; }
+    if (!type){ errEl.textContent = "اكتب نوع الصنف"; errEl.style.display = "block"; return; }
     if (quantity === "" || Number(quantity) < 0){ errEl.textContent = "حدد الكمية"; errEl.style.display = "block"; return; }
     mSave.disabled = true; mSave.textContent = "جاري الحفظ...";
     const item = { id, type, name, size, color, quantity:Number(quantity), price, status, _ts: Date.now() };
