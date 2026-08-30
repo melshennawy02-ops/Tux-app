@@ -246,8 +246,8 @@ const MODULES = [
   { key:"sales", label:"المبيعات", icon:"bag", ready:true },
   { key:"inventory", label:"المخزون", icon:"package", ready:true },
   { key:"customers", label:"العملاء", icon:"users", ready:true },
-  { key:"suppliers", label:"الموردين", icon:"truck", ready:false },
-  { key:"accounts", label:"الحسابات", icon:"wallet", ready:false },
+  { key:"suppliers", label:"الموردين", icon:"truck", ready:true },
+  { key:"accounts", label:"الحسابات", icon:"wallet", ready:true },
   { key:"expenses", label:"المصروفات", icon:"receipt", ready:false },
   { key:"profits", label:"الأرباح", icon:"trending", ready:false },
   { key:"tailor", label:"الترزي", icon:"scissors", ready:true },
@@ -318,6 +318,17 @@ const TAILOR_STATUS = [
 ];
 function tailorStatusOf(v){ return TAILOR_STATUS.find(s => s.value === v) || TAILOR_STATUS[0]; }
 
+const ACCOUNT_TYPES = [
+  { value:"purchase", label:"فاتورة شراء (زيادة المستحق)", color:"var(--red)", bg:"var(--red-bg)" },
+  { value:"payment", label:"دفعة سداد (تقليل المستحق)", color:"var(--green)", bg:"var(--green-bg)" },
+];
+function accountTypeOf(v){ return ACCOUNT_TYPES.find(s => s.value === v) || ACCOUNT_TYPES[0]; }
+function supplierBalance(supplierName){
+  return state.accountEntries
+    .filter(e => e.supplierName === supplierName)
+    .reduce((sum,e) => sum + (e.type === "purchase" ? Number(e.amount||0) : -Number(e.amount||0)), 0);
+}
+
 /* =========================================================
    state
    ========================================================= */
@@ -331,6 +342,8 @@ const state = {
   rentals:[], rentalsLoaded:false, rentalQuery:"", expandedRental:null,
   sales:[], salesLoaded:false, salesQuery:"",
   tailorOrders:[], tailorLoaded:false, tailorQuery:"", expandedTailor:null,
+  suppliers:[], suppliersLoaded:false, supplierQuery:"", expandedSupplier:null,
+  accountEntries:[], accountsLoaded:false, accountQuery:"", expandedAccount:null,
   modal:null, usersCache:[],
   online:true,
 };
@@ -491,25 +504,32 @@ function subscribeData(){
 }
 async function pollOnce(){
   try {
-    const [inv, cust, rent, sale, tailor] = await Promise.all([
+    const [inv, cust, rent, sale, tailor, sup, acc] = await Promise.all([
       fsGetList("inventory"), fsGetList("customers"),
-      fsGetList("rentals"), fsGetList("sales"), fsGetList("tailor")
+      fsGetList("rentals"), fsGetList("sales"), fsGetList("tailor"),
+      fsGetList("suppliers"), fsGetList("accounts")
     ]);
     inv.sort((a,b) => (b._ts||0) - (a._ts||0));
     cust.sort((a,b) => (b._ts||0) - (a._ts||0));
     rent.sort((a,b) => (b._ts||0) - (a._ts||0));
     sale.sort((a,b) => (b._ts||0) - (a._ts||0));
     tailor.sort((a,b) => (b._ts||0) - (a._ts||0));
+    sup.sort((a,b) => (b._ts||0) - (a._ts||0));
+    acc.sort((a,b) => (b._ts||0) - (a._ts||0));
     state.inventory = inv;
     state.customers = cust;
     state.rentals = rent;
     state.sales = sale;
     state.tailorOrders = tailor;
+    state.suppliers = sup;
+    state.accountEntries = acc;
     state.invLoaded = true;
     state.custLoaded = true;
     state.rentalsLoaded = true;
     state.salesLoaded = true;
     state.tailorLoaded = true;
+    state.suppliersLoaded = true;
+    state.accountsLoaded = true;
     state.online = true;
     onDataChanged();
   } catch (e){
@@ -526,6 +546,8 @@ function onDataChanged(){
   if (state.view === "rental" && document.getElementById("rentalList")) refreshRentalList();
   if (state.view === "sales" && document.getElementById("salesList")) refreshSalesList();
   if (state.view === "tailor" && document.getElementById("tailorList")) refreshTailorList();
+  if (state.view === "suppliers" && document.getElementById("supplierList")) refreshSuppliersList();
+  if (state.view === "accounts" && document.getElementById("accountsContent")) refreshAccountsView();
   if (state.view === "dashboard" && document.getElementById("mainContent")){
     document.getElementById("mainContent").innerHTML = renderDashboard();
     bindShellDashboardClicks();
@@ -594,6 +616,8 @@ function renderMainContent(current){
   if (state.view === "rental") return renderRental();
   if (state.view === "sales") return renderSales();
   if (state.view === "tailor") return renderTailor();
+  if (state.view === "suppliers") return renderSuppliers();
+  if (state.view === "accounts") return renderAccounts();
   return renderComingSoon(current);
 }
 
@@ -631,10 +655,14 @@ function renderDashboard(){
       '<div style="font-size:22px;font-weight:700;color:var(--navy)">'+c.value+'</div>' +
       '<div style="font-size:12.5px;color:var(--ink-soft);margin-top:2px">'+c.label+'</div></div>';
   });
+  const totalOwedSuppliers = state.suppliers.reduce((sum,s) => { const b = supplierBalance(s.name); return sum + (b>0?b:0); }, 0);
   return pageHeader("dashboard","نظرة عامة","ملخص سريع لحالة المحل") +
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px">'+cardsHtml+'</div>' +
     (lowStock > 0 ? '<div class="card" style="background:var(--amber-bg);border-color:var(--gold);display:flex;align-items:center;gap:10px;margin-bottom:20px">'+
       icon("warn",17,"var(--amber)")+'<div style="font-size:13px;color:#6b4e0a">في '+lowStock+' صنف الكمية فيه وصلت 2 أو أقل — راجع المخزون</div></div>' : '') +
+    (totalOwedSuppliers > 0 ? '<div class="card" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;margin-bottom:20px" data-view="accounts">'+
+      '<div style="display:flex;align-items:center;gap:8px">'+icon("wallet",16,"var(--red)")+'<span style="font-size:13px;color:var(--ink)">إجمالي المستحق للموردين</span></div>'+
+      '<span style="font-weight:700;color:var(--red);font-size:14px">'+totalOwedSuppliers+' ج.م</span></div>' : '') +
     '<div style="background:var(--navy);border-radius:14px;padding:20px">' +
       '<div style="color:var(--gold-soft);font-weight:700;font-size:15px;margin-bottom:3px">متصل بالسحابة</div>' +
       '<div style="color:rgba(255,255,255,0.6);font-size:12.5px">أي جهاز يفتح البرنامج بنفس بيانات المحل هيشوف نفس البيانات لحظياً</div>' +
@@ -904,6 +932,123 @@ function renderTailor(){
 }
 
 /* =========================================================
+   Suppliers (الموردين)
+   ========================================================= */
+function filteredSuppliers(){
+  const q = state.supplierQuery.toLowerCase();
+  return state.suppliers.filter(s => !q || (s.name||"").toLowerCase().includes(q) || (s.phone||"").includes(state.supplierQuery));
+}
+function suppliersListHtml(){
+  const list = filteredSuppliers();
+  if (!state.suppliersLoaded){
+    return '<div class="empty">'+icon("cloud",30,"var(--line)")+'<div style="margin-top:10px;font-size:14px">جاري التحميل من السحابة...</div></div>';
+  }
+  if (list.length === 0){
+    return '<div class="empty">'+icon("truck",34,"var(--line)")+'<div style="margin-top:10px;font-size:14px">'+
+      (state.suppliers.length===0 ? "لسه مفيش موردين — ابدأ بإضافة أول مورد" : "مفيش نتائج مطابقة")+'</div></div>';
+  }
+  return '<div style="display:flex;flex-direction:column;gap:10px">' + list.map(s => {
+    const isOpen = state.expandedSupplier === s.id;
+    const bal = supplierBalance(s.name);
+    const balColor = bal > 0 ? "var(--red)" : (bal < 0 ? "var(--green)" : "var(--ink-soft)");
+    const balLabel = bal > 0 ? "مستحق عليك" : (bal < 0 ? "رصيد لصالحك" : "متسوّى");
+    const extra = (isOpen && (s.notes)) ? (
+      '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">' +
+      '<div style="font-size:13px;color:var(--ink-soft)">'+esc(s.notes)+'</div>' +
+      '</div>') : '';
+    return '<div class="card">' +
+      '<div class="row" style="cursor:pointer" data-toggle-supplier="'+s.id+'">' +
+        '<div style="width:38px;height:38px;border-radius:50%;background:var(--navy);color:var(--gold-soft);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0">'+esc(s.name ? s.name.trim()[0] : "?")+'</div>' +
+        '<div style="flex:1;min-width:0">' +
+          '<div style="font-weight:600;color:var(--navy);font-size:14.5px">'+esc(s.name||"بدون اسم")+'</div>' +
+          (s.phone ? '<div style="font-size:12.5px;color:var(--ink-soft);display:flex;align-items:center;gap:4px;margin-top:2px">'+icon("phone",11)+' '+esc(s.phone)+'</div>' : '') +
+        '</div>' +
+        '<div style="text-align:left;flex-shrink:0">' +
+          '<div style="font-weight:700;color:'+balColor+';font-size:14px">'+Math.abs(bal)+' ج.م</div>' +
+          '<div style="font-size:10.5px;color:var(--ink-soft)">'+balLabel+'</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:6px" data-stop="1">' +
+          '<button class="btn-icon" data-edit-supplier="'+s.id+'">'+icon("pencil",15,"var(--navy)")+'</button>' +
+          '<button class="btn-icon" data-del-supplier="'+s.id+'">'+icon("trash",15,"var(--red)")+'</button>' +
+        '</div>' +
+      '</div>' + extra +
+    '</div>';
+  }).join("") + '</div>';
+}
+function renderSuppliers(){
+  return pageHeader("truck","الموردين", state.suppliers.length+" مورد مسجل",
+      '<button class="btn-add" id="btnAddSupplier">'+icon("plus",16)+' إضافة مورد</button>') +
+    '<div style="position:relative;margin-bottom:16px">' +
+      '<span style="position:absolute;right:12px;top:12px">'+icon("search",15,"var(--ink-soft)")+'</span>' +
+      '<input class="input" style="padding-right:36px" id="supplierSearch" placeholder="ابحث بالاسم أو رقم التليفون" value="'+esc(state.supplierQuery)+'"/></div>' +
+    '<div id="supplierList">' + suppliersListHtml() + '</div>';
+}
+
+/* =========================================================
+   Accounts (الحسابات المفتوحة مع الموردين)
+   ========================================================= */
+function filteredAccountEntries(){
+  const q = state.accountQuery.toLowerCase();
+  return state.accountEntries.filter(e => !q || (e.supplierName||"").toLowerCase().includes(q) || (e.notes||"").toLowerCase().includes(q));
+}
+function accountsBalancesHtml(){
+  if (state.suppliers.length === 0) return "";
+  const rows = state.suppliers.map(s => {
+    const bal = supplierBalance(s.name);
+    if (bal === 0) return "";
+    const color = bal > 0 ? "var(--red)" : "var(--green)";
+    const label = bal > 0 ? "مستحق عليك" : "رصيد لصالحك";
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.1)">' +
+      '<span style="color:#fff;font-size:13px">'+esc(s.name)+'</span>' +
+      '<span style="color:'+color+';font-weight:700;font-size:13px">'+Math.abs(bal)+' ج.م <span style="font-size:10px;color:rgba(255,255,255,0.5)">'+label+'</span></span>' +
+    '</div>';
+  }).join("");
+  const totalOwed = state.suppliers.reduce((sum,s) => { const b = supplierBalance(s.name); return sum + (b>0?b:0); }, 0);
+  if (!rows) return "";
+  return '<div class="card" style="background:var(--navy);border:none;margin-bottom:16px;padding:14px 16px">' +
+    '<div style="color:var(--gold-soft);font-weight:700;font-size:14px;margin-bottom:8px">إجمالي المستحق للموردين: '+totalOwed+' ج.م</div>' +
+    rows +
+  '</div>';
+}
+function accountsListHtml(){
+  const list = filteredAccountEntries();
+  if (!state.accountsLoaded){
+    return '<div class="empty">'+icon("cloud",30,"var(--line)")+'<div style="margin-top:10px;font-size:14px">جاري التحميل من السحابة...</div></div>';
+  }
+  if (list.length === 0){
+    return '<div class="empty">'+icon("wallet",34,"var(--line)")+'<div style="margin-top:10px;font-size:14px">'+
+      (state.accountEntries.length===0 ? "لسه مفيش حركات حسابات — ابدأ بإضافة أول حركة" : "مفيش نتائج مطابقة")+'</div></div>';
+  }
+  return '<div style="display:flex;flex-direction:column;gap:10px">' + list.map(e => {
+    const t = accountTypeOf(e.type);
+    return '<div class="card row">' +
+      '<div style="width:38px;height:38px;border-radius:10px;background:'+t.bg+';display:flex;align-items:center;justify-content:center;flex-shrink:0">'+icon(e.type==="purchase"?"receipt":"check",17,t.color)+'</div>' +
+      '<div style="flex:1;min-width:0">' +
+        '<div style="font-weight:600;color:var(--navy);font-size:14.5px">'+esc(e.supplierName||"—")+'</div>' +
+        '<div style="font-size:12px;color:var(--ink-soft);margin-top:2px">'+t.label.split(" (")[0]+(e.date?' · '+esc(e.date):'')+(e.notes?' · '+esc(e.notes):'')+'</div>' +
+      '</div>' +
+      '<div style="text-align:left;flex-shrink:0">' +
+        '<div style="font-weight:700;color:'+t.color+';font-size:14.5px">'+(e.type==="purchase"?"+":"-")+esc(e.amount)+'</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:6px;flex-shrink:0">' +
+        '<button class="btn-icon" data-edit-account="'+e.id+'">'+icon("pencil",15,"var(--navy)")+'</button>' +
+        '<button class="btn-icon" data-del-account="'+e.id+'">'+icon("trash",15,"var(--red)")+'</button>' +
+      '</div></div>';
+  }).join("") + '</div>';
+}
+function renderAccounts(){
+  return pageHeader("wallet","الحسابات", state.accountEntries.length+" حركة مسجلة",
+      '<button class="btn-add" id="btnAddAccount">'+icon("plus",16)+' حركة جديدة</button>') +
+    '<div id="accountsContent">' +
+      accountsBalancesHtml() +
+      '<div style="position:relative;margin-bottom:16px">' +
+        '<span style="position:absolute;right:12px;top:12px">'+icon("search",15,"var(--ink-soft)")+'</span>' +
+        '<input class="input" style="padding-right:36px" id="accountSearch" placeholder="ابحث باسم المورد أو ملاحظة" value="'+esc(state.accountQuery)+'"/></div>' +
+      '<div id="accountsList">' + accountsListHtml() + '</div>' +
+    '</div>';
+}
+
+/* =========================================================
    Modal shell
    ========================================================= */
 function openModal(modal){ state.modal = modal; renderModalInto(); }
@@ -944,12 +1089,16 @@ function renderModalInto(){
   else if (m.type === "rental") host.innerHTML = renderRentalModal(m.data);
   else if (m.type === "sale") host.innerHTML = renderSaleModal(m.data);
   else if (m.type === "tailor") host.innerHTML = renderTailorModal(m.data);
+  else if (m.type === "supplier") host.innerHTML = renderSupplierModal(m.data);
+  else if (m.type === "account") host.innerHTML = renderAccountModal(m.data);
   else if (m.type === "users") host.innerHTML = renderUsersModal();
   else if (m.type === "confirmDeleteItem") host.innerHTML = confirmHtml("هل تريد حذف هذا الصنف من المخزون؟");
   else if (m.type === "confirmDeleteCust") host.innerHTML = confirmHtml("هل تريد حذف بيانات هذا العميل؟");
   else if (m.type === "confirmDeleteRental") host.innerHTML = confirmHtml("هل تريد حذف عملية الإيجار دي؟");
   else if (m.type === "confirmDeleteSale") host.innerHTML = confirmHtml("هل تريد حذف عملية البيع دي؟");
   else if (m.type === "confirmDeleteTailor") host.innerHTML = confirmHtml("هل تريد حذف طلب الترزي ده؟");
+  else if (m.type === "confirmDeleteSupplier") host.innerHTML = confirmHtml("هل تريد حذف بيانات هذا المورد؟");
+  else if (m.type === "confirmDeleteAccount") host.innerHTML = confirmHtml("هل تريد حذف حركة الحساب دي؟");
   else if (m.type === "confirmDeleteUser") host.innerHTML = confirmHtml("هل تريد حذف هذا المستخدم؟");
 
   bindModalEvents();
@@ -1042,6 +1191,42 @@ function renderCustomerModal(c){
       '<button class="btn-primary" id="m_csave">حفظ</button>' +
     '</div>';
   return modalShellHtml(c.name ? "تعديل بيانات العميل" : "إضافة عميل جديد", body) + '<input type="hidden" id="m_cid" value="'+c.id+'"/>';
+}
+
+/* ---- supplier modal ---- */
+function renderSupplierModal(s){
+  const body = '' +
+    '<div style="display:flex;flex-direction:column;gap:12px">' +
+      '<div><label class="label">اسم المورد</label><input class="input" id="m_supname" value="'+esc(s.name)+'" placeholder="اسم المورد / الشركة"/></div>' +
+      '<div><label class="label">رقم التليفون</label><input class="input" id="m_supphone" value="'+esc(s.phone)+'" placeholder="01xxxxxxxxx"/></div>' +
+      '<div><label class="label">ملاحظات</label><textarea class="input" id="m_supnotes" style="min-height:56px;resize:vertical" placeholder="نوع البضاعة، شروط التعامل، إلخ">'+esc(s.notes)+'</textarea></div>' +
+      '<div id="m_superr" class="err" style="display:none"></div>' +
+      '<button class="btn-primary" id="m_supsave">حفظ</button>' +
+    '</div>';
+  return modalShellHtml(s.name ? "تعديل بيانات المورد" : "إضافة مورد جديد", body) + '<input type="hidden" id="m_supid" value="'+s.id+'"/>';
+}
+
+/* ---- account entry modal ---- */
+function supplierPickerOptions(selectedName){
+  let opts = '<option value=""'+(!selectedName?" selected":"")+'>-- اختار مورد --</option>';
+  state.suppliers.forEach(s => {
+    opts += '<option value="'+esc(s.name)+'"'+(selectedName===s.name?" selected":"")+'>'+esc(s.name)+'</option>';
+  });
+  return opts;
+}
+function renderAccountModal(e){
+  let typeOpts = ACCOUNT_TYPES.map(t => '<option value="'+t.value+'"'+(e.type===t.value?" selected":"")+'>'+t.label+'</option>').join("");
+  const body = '' +
+    '<div style="display:flex;flex-direction:column;gap:12px">' +
+      '<div><label class="label">المورد</label><select class="input" id="m_accsup">'+supplierPickerOptions(e.supplierName)+'</select></div>' +
+      '<div><label class="label">نوع الحركة</label><select class="input" id="m_acctype">'+typeOpts+'</select></div>' +
+      '<div><label class="label">المبلغ</label><input class="input" id="m_accamount" type="number" min="0" value="'+esc(e.amount)+'" placeholder="ج.م"/></div>' +
+      '<div><label class="label">التاريخ</label><input class="input" id="m_accdate" type="date" value="'+esc(e.date)+'"/></div>' +
+      '<div><label class="label">ملاحظات</label><textarea class="input" id="m_accnotes" style="min-height:56px;resize:vertical" placeholder="رقم فاتورة، تفاصيل البضاعة، إلخ">'+esc(e.notes)+'</textarea></div>' +
+      '<div id="m_accerr" class="err" style="display:none"></div>' +
+      '<button class="btn-primary" id="m_accsave">حفظ</button>' +
+    '</div>';
+  return modalShellHtml(e.supplierName ? "تعديل الحركة" : "حركة حساب جديدة", body) + '<input type="hidden" id="m_accid" value="'+e.id+'"/>';
 }
 
 /* ---- rental modal ---- */
@@ -1190,6 +1375,8 @@ function bindShellEvents(){
   if (state.view === "rental") bindRentalEvents();
   if (state.view === "sales") bindSalesEvents();
   if (state.view === "tailor") bindTailorEvents();
+  if (state.view === "suppliers") bindSuppliersEvents();
+  if (state.view === "accounts") bindAccountsEvents();
 }
 
 function bindInventoryEvents(){
@@ -1359,6 +1546,82 @@ function bindTailorListEvents(){
   document.querySelectorAll("[data-del-tailor]").forEach(btn => {
     btn.addEventListener("click", () => {
       openModal({ type:"confirmDeleteTailor", id: btn.getAttribute("data-del-tailor") });
+    });
+  });
+}
+
+function bindSuppliersEvents(){
+  const addBtn = document.getElementById("btnAddSupplier");
+  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"supplier", data:{ id:uid(), name:"", phone:"", notes:"" } }));
+  const search = document.getElementById("supplierSearch");
+  if (search) search.addEventListener("input", () => { state.supplierQuery = search.value; refreshSuppliersList(); });
+  bindSuppliersListEvents();
+}
+function refreshSuppliersList(){
+  const host = document.getElementById("supplierList");
+  if (!host) return;
+  host.innerHTML = suppliersListHtml();
+  bindSuppliersListEvents();
+}
+function bindSuppliersListEvents(){
+  document.querySelectorAll("[data-toggle-supplier]").forEach(el => {
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-stop]")) return;
+      const id = el.getAttribute("data-toggle-supplier");
+      state.expandedSupplier = state.expandedSupplier === id ? null : id;
+      refreshSuppliersList();
+    });
+  });
+  document.querySelectorAll("[data-edit-supplier]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-edit-supplier");
+      const s = state.suppliers.find(x => x.id === id);
+      if (s) openModal({ type:"supplier", data: Object.assign({}, s) });
+    });
+  });
+  document.querySelectorAll("[data-del-supplier]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      openModal({ type:"confirmDeleteSupplier", id: btn.getAttribute("data-del-supplier") });
+    });
+  });
+}
+
+function bindAccountsEvents(){
+  const addBtn = document.getElementById("btnAddAccount");
+  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"account", data:{ id:uid(), supplierName:"", type:"purchase", amount:"", date:"", notes:"" } }));
+  const search = document.getElementById("accountSearch");
+  if (search) search.addEventListener("input", () => { state.accountQuery = search.value; refreshAccountsList(); });
+  bindAccountsListEvents();
+}
+function refreshAccountsView(){
+  const host = document.getElementById("accountsContent");
+  if (!host) return;
+  host.innerHTML = accountsBalancesHtml() +
+    '<div style="position:relative;margin-bottom:16px">' +
+      '<span style="position:absolute;right:12px;top:12px">'+icon("search",15,"var(--ink-soft)")+'</span>' +
+      '<input class="input" style="padding-right:36px" id="accountSearch" placeholder="ابحث باسم المورد أو ملاحظة" value="'+esc(state.accountQuery)+'"/></div>' +
+    '<div id="accountsList">' + accountsListHtml() + '</div>';
+  const search = document.getElementById("accountSearch");
+  if (search) search.addEventListener("input", () => { state.accountQuery = search.value; refreshAccountsList(); });
+  bindAccountsListEvents();
+}
+function refreshAccountsList(){
+  const host = document.getElementById("accountsList");
+  if (!host) return;
+  host.innerHTML = accountsListHtml();
+  bindAccountsListEvents();
+}
+function bindAccountsListEvents(){
+  document.querySelectorAll("[data-edit-account]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-edit-account");
+      const e = state.accountEntries.find(x => x.id === id);
+      if (e) openModal({ type:"account", data: Object.assign({}, e) });
+    });
+  });
+  document.querySelectorAll("[data-del-account]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      openModal({ type:"confirmDeleteAccount", id: btn.getAttribute("data-del-account") });
     });
   });
 }
@@ -1784,6 +2047,57 @@ function bindModalEvents(){
     }
   });
 
+  // supplier save
+  const mSupSave = document.getElementById("m_supsave");
+  if (mSupSave) mSupSave.addEventListener("click", async () => {
+    const id = document.getElementById("m_supid").value;
+    const name = document.getElementById("m_supname").value.trim();
+    const phone = document.getElementById("m_supphone").value.trim();
+    const notes = document.getElementById("m_supnotes").value.trim();
+    const errEl = document.getElementById("m_superr");
+    if (!name){ errEl.textContent = "اكتب اسم المورد"; errEl.style.display = "block"; return; }
+    mSupSave.disabled = true; mSupSave.textContent = "جاري الحفظ...";
+    const s = { id, name, phone, notes, _ts: Date.now() };
+    try {
+      const arr = await fsGetList("suppliers");
+      const idx = arr.findIndex(x => x.id === id);
+      if (idx >= 0) arr[idx] = s; else arr.unshift(s);
+      await fsSaveList("suppliers", arr);
+      closeModal();
+      pollOnce();
+    } catch(err){
+      mSupSave.disabled = false; mSupSave.textContent = "حفظ";
+      errEl.textContent = "حصل خطأ في الحفظ، تأكد من الإنترنت"; errEl.style.display = "block";
+    }
+  });
+
+  // account entry save
+  const mAccSave = document.getElementById("m_accsave");
+  if (mAccSave) mAccSave.addEventListener("click", async () => {
+    const id = document.getElementById("m_accid").value;
+    const supplierName = document.getElementById("m_accsup").value;
+    const type = document.getElementById("m_acctype").value;
+    const amount = document.getElementById("m_accamount").value;
+    const date = document.getElementById("m_accdate").value;
+    const notes = document.getElementById("m_accnotes").value.trim();
+    const errEl = document.getElementById("m_accerr");
+    if (!supplierName){ errEl.textContent = "اختار المورد"; errEl.style.display = "block"; return; }
+    if (!amount || Number(amount) <= 0){ errEl.textContent = "حدد المبلغ"; errEl.style.display = "block"; return; }
+    mAccSave.disabled = true; mAccSave.textContent = "جاري الحفظ...";
+    const e = { id, supplierName, type, amount, date, notes, _ts: Date.now() };
+    try {
+      const arr = await fsGetList("accounts");
+      const idx = arr.findIndex(x => x.id === id);
+      if (idx >= 0) arr[idx] = e; else arr.unshift(e);
+      await fsSaveList("accounts", arr);
+      closeModal();
+      pollOnce();
+    } catch(err){
+      mAccSave.disabled = false; mAccSave.textContent = "حفظ";
+      errEl.textContent = "حصل خطأ في الحفظ، تأكد من الإنترنت"; errEl.style.display = "block";
+    }
+  });
+
   // confirm delete
   const confirmYes = document.getElementById("confirmYes");
   const confirmCancel = document.getElementById("confirmCancel");
@@ -1821,6 +2135,20 @@ function bindModalEvents(){
       confirmYes.addEventListener("click", async () => {
         const arr = await fsGetList("tailor");
         await fsSaveList("tailor", arr.filter(x => x.id !== state.modal.id));
+        closeModal();
+        pollOnce();
+      });
+    } else if (state.modal.type === "confirmDeleteSupplier"){
+      confirmYes.addEventListener("click", async () => {
+        const arr = await fsGetList("suppliers");
+        await fsSaveList("suppliers", arr.filter(x => x.id !== state.modal.id));
+        closeModal();
+        pollOnce();
+      });
+    } else if (state.modal.type === "confirmDeleteAccount"){
+      confirmYes.addEventListener("click", async () => {
+        const arr = await fsGetList("accounts");
+        await fsSaveList("accounts", arr.filter(x => x.id !== state.modal.id));
         closeModal();
         pollOnce();
       });
