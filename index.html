@@ -956,13 +956,19 @@ function renderModalInto(){
 }
 
 /* ---- item modal ---- */
-/* ---- bulk item modal (multiple colors x sizes at once) ---- */
-const bulkAdd = { colors: new Set(), sizes: new Set(), customSizes: [] };
-function resetBulkAdd(){ bulkAdd.colors = new Set(); bulkAdd.sizes = new Set(); bulkAdd.customSizes = []; }
+/* ---- bulk item modal (each selected color gets its own sizes + quantity) ---- */
+const bulkAdd = { selectedColors: [], colorSizes: {}, colorQty: {}, customColors: [], customSizes: [] };
+function resetBulkAdd(){
+  bulkAdd.selectedColors = []; bulkAdd.colorSizes = {}; bulkAdd.colorQty = {};
+  bulkAdd.customColors = []; bulkAdd.customSizes = [];
+}
 function bulkSizeOptions(typeText){
   const preset = detectSizePreset(typeText) || [];
   const extra = bulkAdd.customSizes.filter(s => preset.indexOf(s) === -1);
   return preset.concat(extra);
+}
+function bulkColorPool(){
+  return COLOR_PRESETS.concat(bulkAdd.customColors.filter(c => COLOR_PRESETS.indexOf(c) === -1));
 }
 function renderBulkItemModal(){
   const body = '' +
@@ -970,23 +976,26 @@ function renderBulkItemModal(){
       '<div><label class="label">نوع الصنف</label><input class="input" id="bm_type" placeholder="مثال: قميص كلاسيك"/></div>' +
       '<div><label class="label">اسم / وصف مشترك (اختياري)</label><input class="input" id="bm_name" placeholder="مثال: قميص قطن كلاسيك"/></div>' +
       '<div>' +
-        '<label class="label">اختار الألوان (تقدر تختار أكتر من واحد)</label>' +
-        '<div id="bm_colorChips" style="display:flex;flex-wrap:wrap;gap:7px">'+toggleChipsHtml(COLOR_PRESETS,"color",bulkAdd.colors)+'</div>' +
+        '<label class="label">اختار الألوان المتاحة (دوس على أي لون عشان تحدد مقاساته وكميته)</label>' +
+        '<div id="bm_colorChips" style="display:flex;flex-wrap:wrap;gap:7px"></div>' +
+        '<div style="display:flex;gap:8px;margin-top:8px">' +
+          '<input class="input" id="bm_customcolor" placeholder="لون إضافي غير موجود فوق" style="flex:1"/>' +
+          '<button type="button" class="btn-icon" id="bm_addcolor" style="width:44px">'+icon("plus",16,"var(--navy)")+'</button>' +
+        '</div>' +
       '</div>' +
       '<div>' +
-        '<label class="label">اختار المقاسات</label>' +
-        '<div id="bm_sizeChips" style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:8px"></div>' +
+        '<label class="label">مقاس إضافي (هيبان اختيار في كل لون)</label>' +
         '<div style="display:flex;gap:8px">' +
-          '<input class="input" id="bm_customsize" placeholder="مقاس إضافي غير موجود فوق" style="flex:1"/>' +
+          '<input class="input" id="bm_customsize" placeholder="مثال: 62" style="flex:1"/>' +
           '<button type="button" class="btn-icon" id="bm_addsize" style="width:44px">'+icon("plus",16,"var(--navy)")+'</button>' +
         '</div>' +
       '</div>' +
-      '<div><label class="label">الكمية لكل مقاس ولون</label><input class="input" id="bm_qty" type="number" min="1" value="1"/></div>' +
+      '<div id="bm_colorCards" style="display:flex;flex-direction:column;gap:12px"></div>' +
       '<div style="display:flex;gap:10px">' +
         '<div style="flex:1"><label class="label">سعر الإيجار (اختياري)</label><input class="input" id="bm_rentprice" type="number" min="0" placeholder="ج.م"/></div>' +
         '<div style="flex:1"><label class="label">سعر البيع (اختياري)</label><input class="input" id="bm_saleprice" type="number" min="0" placeholder="ج.م"/></div>' +
       '</div>' +
-      '<div id="bm_preview" style="font-size:12.5px;color:var(--ink-soft);background:var(--cream);border-radius:8px;padding:10px 12px">اختار الألوان والمقاسات وهيبان هنا عدد الأصناف اللي هتتضاف</div>' +
+      '<div id="bm_preview" style="font-size:12.5px;color:var(--ink-soft);background:var(--cream);border-radius:8px;padding:10px 12px">اختار لون وحدد مقاساته وكميته وهيبان هنا عدد الأصناف اللي هتتضاف</div>' +
       '<div id="bm_err" class="err" style="display:none"></div>' +
       '<button class="btn-primary" id="bm_save">إضافة كل الأصناف</button>' +
     '</div>';
@@ -1387,54 +1396,121 @@ function bindModalEvents(){
     }
   });
 
-  // bulk add modal (multiple colors x sizes at once)
+  // bulk add modal — each selected color gets its own sizes + quantity card
   if (document.getElementById("bm_save")){
-    function bmRefreshSizeChips(){
-      const typeVal = document.getElementById("bm_type").value;
-      const box = document.getElementById("bm_sizeChips");
-      box.innerHTML = toggleChipsHtml(bulkSizeOptions(typeVal), "size", bulkAdd.sizes);
-      bmBindToggles(box);
-    }
     function bmRefreshPreview(){
-      const n = bulkAdd.colors.size * bulkAdd.sizes.size;
-      const qty = Number(document.getElementById("bm_qty").value) || 0;
+      let items = 0, totalQty = 0;
+      bulkAdd.selectedColors.forEach(function(color){
+        const sizesSet = bulkAdd.colorSizes[color] || new Set();
+        const qty = bulkAdd.colorQty[color] || 1;
+        items += sizesSet.size;
+        totalQty += sizesSet.size * qty;
+      });
       const box = document.getElementById("bm_preview");
-      if (n === 0){
-        box.textContent = "اختار الألوان والمقاسات وهيبان هنا عدد الأصناف اللي هتتضاف";
+      if (items === 0){
+        box.textContent = "اختار لون وحدد مقاساته وكميته وهيبان هنا عدد الأصناف اللي هتتضاف";
       } else {
-        box.innerHTML = "هيتضاف <b>"+n+"</b> صنف (كل صنف كمية "+qty+") — يعني إجمالي القطع: <b>"+(n*qty)+"</b>";
+        box.innerHTML = "هيتضاف <b>"+items+"</b> صنف — إجمالي القطع: <b>"+totalQty+"</b>";
       }
     }
-    function bmBindToggles(root){
-      root.querySelectorAll(".chip-toggle").forEach(function(btn){
+
+    function bmRenderColorCards(){
+      const typeVal = document.getElementById("bm_type").value;
+      const sizeOptions = bulkSizeOptions(typeVal);
+      const box = document.getElementById("bm_colorCards");
+      if (bulkAdd.selectedColors.length === 0){
+        box.innerHTML = '<div style="font-size:12.5px;color:var(--ink-soft);text-align:center;padding:16px;border:1px dashed var(--line);border-radius:10px">اختار لون فوق الأول عشان تحدد مقاساته وكميته</div>';
+        return;
+      }
+      box.innerHTML = bulkAdd.selectedColors.map(function(color){
+        const sizesSet = bulkAdd.colorSizes[color] || new Set();
+        const qty = bulkAdd.colorQty[color] || 1;
+        return '<div class="card" style="padding:14px">' +
+          '<div style="font-weight:700;color:var(--navy);font-size:14px;margin-bottom:10px">'+esc(color)+'</div>' +
+          '<div class="label" style="margin-bottom:6px">مقاسات متاحة من اللون ده</div>' +
+          '<div class="bm-size-row" data-color="'+esc(color)+'" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">' +
+            sizeOptions.map(function(s){ return toggleChipHtml(s, "size|"+color, sizesSet.has(s)); }).join("") +
+          '</div>' +
+          '<label class="label">الكمية للون ده (لكل مقاس مختار)</label>' +
+          '<input class="input bm-color-qty" data-color="'+esc(color)+'" type="number" min="1" value="'+qty+'"/>' +
+        '</div>';
+      }).join("");
+
+      box.querySelectorAll(".chip-toggle").forEach(function(btn){
         btn.addEventListener("click", function(){
-          const group = btn.getAttribute("data-group");
+          const group = btn.getAttribute("data-group"); // "size|<colorName>"
+          const color = group.slice(5);
           const val = btn.getAttribute("data-val");
-          const set = group === "color" ? bulkAdd.colors : bulkAdd.sizes;
+          const set = bulkAdd.colorSizes[color];
           const nowSelected = btn.getAttribute("data-selected") === "1";
           if (nowSelected){ set.delete(val); btn.setAttribute("data-selected","0"); btn.style.background="#fff"; btn.style.color="var(--navy)"; btn.style.borderColor="var(--line)"; btn.style.fontWeight="400"; }
           else { set.add(val); btn.setAttribute("data-selected","1"); btn.style.background="var(--navy)"; btn.style.color="var(--gold-soft)"; btn.style.borderColor="var(--navy)"; btn.style.fontWeight="700"; }
           bmRefreshPreview();
         });
       });
+      box.querySelectorAll(".bm-color-qty").forEach(function(inp){
+        inp.addEventListener("input", function(){
+          bulkAdd.colorQty[inp.getAttribute("data-color")] = Number(inp.value) || 1;
+          bmRefreshPreview();
+        });
+      });
     }
-    bmRefreshSizeChips();
-    bmBindToggles(document.getElementById("bm_colorChips"));
-    bmBindToggles(document.getElementById("bm_sizeChips"));
+
+    function bmRenderColorChips(){
+      const box = document.getElementById("bm_colorChips");
+      box.innerHTML = bulkColorPool().map(function(c){
+        return toggleChipHtml(c, "color", bulkAdd.selectedColors.indexOf(c) !== -1);
+      }).join("");
+      box.querySelectorAll(".chip-toggle").forEach(function(btn){
+        btn.addEventListener("click", function(){
+          const val = btn.getAttribute("data-val");
+          const idx = bulkAdd.selectedColors.indexOf(val);
+          if (idx === -1){
+            bulkAdd.selectedColors.push(val);
+            bulkAdd.colorSizes[val] = bulkAdd.colorSizes[val] || new Set();
+            bulkAdd.colorQty[val] = bulkAdd.colorQty[val] || 1;
+          } else {
+            bulkAdd.selectedColors.splice(idx, 1);
+          }
+          bmRenderColorChips();
+          bmRenderColorCards();
+          bmRefreshPreview();
+        });
+      });
+    }
+
+    bmRenderColorChips();
+    bmRenderColorCards();
     bmRefreshPreview();
 
-    document.getElementById("bm_type").addEventListener("input", bmRefreshSizeChips);
-    document.getElementById("bm_qty").addEventListener("input", bmRefreshPreview);
+    document.getElementById("bm_type").addEventListener("input", function(){
+      bmRenderColorCards();
+      bmRefreshPreview();
+    });
+
+    document.getElementById("bm_addcolor").addEventListener("click", function(){
+      const input = document.getElementById("bm_customcolor");
+      const val = input.value.trim();
+      if (!val) return;
+      if (bulkAdd.customColors.indexOf(val) === -1) bulkAdd.customColors.push(val);
+      if (bulkAdd.selectedColors.indexOf(val) === -1){
+        bulkAdd.selectedColors.push(val);
+        bulkAdd.colorSizes[val] = bulkAdd.colorSizes[val] || new Set();
+        bulkAdd.colorQty[val] = bulkAdd.colorQty[val] || 1;
+      }
+      input.value = "";
+      bmRenderColorChips();
+      bmRenderColorCards();
+      bmRefreshPreview();
+    });
 
     document.getElementById("bm_addsize").addEventListener("click", function(){
       const input = document.getElementById("bm_customsize");
       const val = input.value.trim();
       if (!val) return;
       if (bulkAdd.customSizes.indexOf(val) === -1) bulkAdd.customSizes.push(val);
-      bulkAdd.sizes.add(val);
       input.value = "";
-      bmRefreshSizeChips();
-      bmRefreshPreview();
+      bmRenderColorCards();
     });
 
     document.getElementById("bm_save").addEventListener("click", async function(){
@@ -1442,19 +1518,20 @@ function bindModalEvents(){
       const errEl = document.getElementById("bm_err");
       const type = document.getElementById("bm_type").value.trim();
       const name = document.getElementById("bm_name").value.trim();
-      const qty = Number(document.getElementById("bm_qty").value);
       const rentPrice = document.getElementById("bm_rentprice").value;
       const salePrice = document.getElementById("bm_saleprice").value;
       if (!type){ errEl.textContent = "اكتب نوع الصنف"; errEl.style.display = "block"; return; }
-      if (bulkAdd.colors.size === 0){ errEl.textContent = "اختار لون واحد على الأقل"; errEl.style.display = "block"; return; }
-      if (bulkAdd.sizes.size === 0){ errEl.textContent = "اختار مقاس واحد على الأقل"; errEl.style.display = "block"; return; }
-      if (!qty || qty < 1){ errEl.textContent = "حدد الكمية لكل صنف"; errEl.style.display = "block"; return; }
+      if (bulkAdd.selectedColors.length === 0){ errEl.textContent = "اختار لون واحد على الأقل"; errEl.style.display = "block"; return; }
+      const hasAnySize = bulkAdd.selectedColors.some(function(c){ return (bulkAdd.colorSizes[c] || new Set()).size > 0; });
+      if (!hasAnySize){ errEl.textContent = "اختار مقاس واحد على الأقل لأي لون"; errEl.style.display = "block"; return; }
       saveBtn.disabled = true; saveBtn.textContent = "جاري الإضافة...";
       try {
         const arr = await fsGetList("inventory");
         let t = Date.now();
-        bulkAdd.colors.forEach(function(color){
-          bulkAdd.sizes.forEach(function(size){
+        bulkAdd.selectedColors.forEach(function(color){
+          const sizesSet = bulkAdd.colorSizes[color] || new Set();
+          const qty = bulkAdd.colorQty[color] || 1;
+          sizesSet.forEach(function(size){
             t += 1;
             arr.unshift({ id:uid(), type, name, size, color, quantity:qty, availableQty:qty, rentPrice, salePrice, status:"available", _ts:t });
           });
