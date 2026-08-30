@@ -722,12 +722,10 @@ function renderModalInto(){
 
 /* ---- item modal ---- */
 function renderItemModal(item){
-  const suggestions = Array.from(new Set(ITEM_TYPES.concat(distinctTypes())));
-  let typeListOpts = suggestions.map(t => '<option value="'+esc(t)+'"></option>').join("");
   let statusOpts = STATUS_OPTIONS.map(s => '<option value="'+s.value+'"'+(item.status===s.value?" selected":"")+'>'+s.label+'</option>').join("");
   const body = '' +
     '<div style="display:flex;flex-direction:column;gap:12px">' +
-      '<div><label class="label">نوع الصنف</label><input class="input" id="m_type" list="typeSuggestions" value="'+esc(item.type)+'" placeholder="مثال: بنطلون، كرافتة، برفان..."/><datalist id="typeSuggestions">'+typeListOpts+'</datalist></div>' +
+      '<div><label class="label">نوع الصنف</label><input class="input" id="m_type" value="'+esc(item.type)+'" placeholder="مثال: بنطلون، كرافتة، برفان..."/></div>' +
       '<div><label class="label">اسم / وصف الصنف</label><input class="input" id="m_name" value="'+esc(item.name)+'" placeholder="مثال: بدلة كحلي كلاسيك"/></div>' +
       '<div style="display:flex;gap:10px">' +
         '<div style="flex:1"><label class="label">المقاس</label><input class="input" id="m_size" value="'+esc(item.size)+'" placeholder="50"/></div>' +
