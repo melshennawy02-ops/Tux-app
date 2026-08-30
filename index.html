@@ -262,11 +262,16 @@ const STATUS_OPTIONS = [
   { value:"maintenance", label:"صيانة", color:"var(--red)", bg:"var(--red-bg)" },
 ];
 function statusOf(v){ return STATUS_OPTIONS.find(s => s.value === v) || STATUS_OPTIONS[0]; }
+function availableQtyOf(item){
+  const v = Number(item.availableQty);
+  return isNaN(v) ? Number(item.quantity||0) : v;
+}
 
 const RENTAL_STATUS = [
   { value:"active", label:"مؤجرة", color:"var(--amber)", bg:"var(--amber-bg)" },
-  { value:"returned", label:"تم الإرجاع", color:"var(--green)", bg:"var(--green-bg)" },
   { value:"late", label:"متأخرة", color:"var(--red)", bg:"var(--red-bg)" },
+  { value:"laundry", label:"رجعت - في الغسيل", color:"#5B6FA6", bg:"#EBEEFA" },
+  { value:"returned", label:"رجعت للمخزون", color:"var(--green)", bg:"var(--green-bg)" },
 ];
 function rentalStatusOf(v){ return RENTAL_STATUS.find(s => s.value === v) || RENTAL_STATUS[0]; }
 
@@ -575,11 +580,11 @@ function renderDashboard(){
   }
   const total = state.inventory.length;
   const rented = state.inventory.filter(i => i.status === "rented").length;
-  const available = state.inventory.filter(i => i.status === "available").length;
-  const lowStock = state.inventory.filter(i => Number(i.quantity) <= 2).length;
+  const available = state.inventory.reduce((sum,i) => sum + availableQtyOf(i), 0);
+  const lowStock = state.inventory.filter(i => availableQtyOf(i) <= 2).length;
   const cards = [
     { label:"إجمالي القطع", value:total, icon:"package", view:"inventory" },
-    { label:"متاحة", value:available, icon:"check", color:"var(--green)" },
+    { label:"متاحة الآن", value:available, icon:"check", color:"var(--green)" },
     { label:"مؤجرة حالياً", value:rented, icon:"shirt", color:"var(--amber)" },
     { label:"عدد العملاء", value:state.customers.length, icon:"users", view:"customers" },
   ];
@@ -623,7 +628,8 @@ function inventoryListHtml(){
   }
   return '<div style="display:flex;flex-direction:column;gap:10px">' + list.map(item => {
     const st = statusOf(item.status);
-    const low = Number(item.quantity) <= 2;
+    const avail = availableQtyOf(item);
+    const low = avail <= 2;
     return '<div class="card row">' +
       '<div style="width:40px;height:40px;border-radius:10px;background:var(--cream);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:11px;color:var(--navy);font-weight:700">'+esc(item.type[0])+'</div>' +
       '<div style="flex:1;min-width:0">' +
@@ -632,7 +638,7 @@ function inventoryListHtml(){
           '<span class="badge" style="background:'+st.bg+';color:'+st.color+'">'+st.label+'</span>' +
           (low ? '<span style="font-size:11px;color:var(--red);display:flex;align-items:center;gap:3px">'+icon("warn",11)+' كمية قليلة</span>' : '') +
         '</div>' +
-        '<div style="font-size:12.5px;color:var(--ink-soft);margin-top:3px">'+esc(item.type)+' · مقاس '+esc(item.size||"—")+' · '+esc(item.color||"بدون لون محدد")+' · الكمية '+item.quantity+'</div>' +
+        '<div style="font-size:12.5px;color:var(--ink-soft);margin-top:3px">'+esc(item.type)+' · مقاس '+esc(item.size||"—")+' · '+esc(item.color||"بدون لون محدد")+' · متاح '+avail+' من '+item.quantity+'</div>' +
         (item.rentPrice || item.salePrice ? '<div style="font-size:12px;color:var(--navy);margin-top:3px;display:flex;gap:10px">'+
           (item.rentPrice ? '<span>إيجار: <b>'+esc(item.rentPrice)+'</b> ج.م</span>' : '') +
           (item.salePrice ? '<span>بيع: <b>'+esc(item.salePrice)+'</b> ج.م</span>' : '') +
@@ -923,7 +929,7 @@ function renderItemModal(item){
         '<div style="flex:1"><label class="label">اللون</label><input class="input" id="m_color" value="'+esc(item.color)+'" placeholder="كحلي"/></div>' +
       '</div>' +
       '<div style="display:flex;gap:10px">' +
-        '<div style="flex:1"><label class="label">الكمية</label><input class="input" id="m_qty" type="number" min="0" value="'+esc(item.quantity)+'"/></div>' +
+        '<div style="flex:1"><label class="label">الكمية الإجمالية المملوكة</label><input class="input" id="m_qty" type="number" min="0" value="'+esc(item.quantity)+'"/></div>' +
         '<div style="flex:1"><label class="label">الحالة</label><select class="input" id="m_status">'+statusOpts+'</select></div>' +
       '</div>' +
       '<div style="display:flex;gap:10px">' +
@@ -954,7 +960,8 @@ function renderCustomerModal(c){
 function inventoryPickerOptions(selectedId){
   let opts = '<option value=""'+(!selectedId?" selected":"")+'>-- اختار من المخزون (اختياري) --</option>';
   state.inventory.forEach(it => {
-    const label = (it.type||"") + (it.name?" - "+it.name:"") + (it.size?" - مقاس "+it.size:"") + (it.color?" - "+it.color:"") + " (متاح "+it.quantity+")";
+    const avail = availableQtyOf(it);
+    const label = (it.type||"") + (it.name?" - "+it.name:"") + (it.size?" - مقاس "+it.size:"") + (it.color?" - "+it.color:"") + " (متاح "+avail+")";
     opts += '<option value="'+esc(it.id)+'"'+(selectedId===it.id?" selected":"")+'>'+esc(label)+'</option>';
   });
   return opts;
@@ -980,7 +987,7 @@ function renderRentalModal(r){
       '<div id="m_rerr" class="err" style="display:none"></div>' +
       '<button class="btn-primary" id="m_rsave">حفظ</button>' +
     '</div>';
-  return modalShellHtml(r.customerName ? "تعديل عملية الإيجار" : "إيجار جديد", body) + '<input type="hidden" id="m_rid" value="'+r.id+'"/>';
+  return modalShellHtml(r.customerName ? "تعديل عملية الإيجار" : "إيجار جديد", body) + '<input type="hidden" id="m_rid" value="'+r.id+'"/><input type="hidden" id="m_r_stockadjusted" value="'+(r.stockAdjusted?"true":"false")+'"/>';
 }
 
 /* ---- sale modal ---- */
@@ -1159,7 +1166,7 @@ function bindCustomersListEvents(){
 
 function bindRentalEvents(){
   const addBtn = document.getElementById("btnAddRental");
-  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"rental", data:{ id:uid(), customerName:"", itemId:"", itemDesc:"", rentDate:"", dueDate:"", price:"", deposit:"", status:"active", notes:"" } }));
+  if (addBtn) addBtn.addEventListener("click", () => openModal({ type:"rental", data:{ id:uid(), customerName:"", itemId:"", itemDesc:"", rentDate:"", dueDate:"", price:"", deposit:"", status:"active", notes:"", stockAdjusted:false } }));
   const search = document.getElementById("rentalSearch");
   if (search) search.addEventListener("input", () => { state.rentalQuery = search.value; refreshRentalList(); });
   bindRentalListEvents();
@@ -1308,10 +1315,20 @@ function bindModalEvents(){
     if (!type){ errEl.textContent = "اكتب نوع الصنف"; errEl.style.display = "block"; return; }
     if (quantity === "" || Number(quantity) < 0){ errEl.textContent = "حدد الكمية"; errEl.style.display = "block"; return; }
     mSave.disabled = true; mSave.textContent = "جاري الحفظ...";
-    const item = { id, type, name, size, color, quantity:Number(quantity), rentPrice, salePrice, status, _ts: Date.now() };
     try {
       const arr = await fsGetList("inventory");
       const idx = arr.findIndex(x => x.id === id);
+      let availableQty;
+      if (idx >= 0){
+        const old = arr[idx];
+        const oldQty = Number(old.quantity||0);
+        const oldAvail = availableQtyOf(old);
+        const delta = Number(quantity) - oldQty;
+        availableQty = Math.max(0, oldAvail + delta);
+      } else {
+        availableQty = Number(quantity);
+      }
+      const item = { id, type, name, size, color, quantity:Number(quantity), availableQty, rentPrice, salePrice, status, _ts: Date.now() };
       if (idx >= 0) arr[idx] = item; else arr.unshift(item);
       await fsSaveList("inventory", arr);
       closeModal();
@@ -1360,26 +1377,42 @@ function bindModalEvents(){
     const deposit = document.getElementById("m_rdeposit").value;
     const status = document.getElementById("m_rstatus").value;
     const notes = document.getElementById("m_rnotes").value.trim();
+    const prevAdjusted = document.getElementById("m_r_stockadjusted").value === "true";
     const errEl = document.getElementById("m_rerr");
     if (!customerName){ errEl.textContent = "اكتب اسم العميل"; errEl.style.display = "block"; return; }
     if (!itemDesc){ errEl.textContent = "اكتب وصف الصنف المؤجر"; errEl.style.display = "block"; return; }
     mRSave.disabled = true; mRSave.textContent = "جاري الحفظ...";
-    const r = { id, customerName, itemId, itemDesc, rentDate, dueDate, price, deposit, status, notes, _ts: Date.now() };
+    let stockAdjusted = prevAdjusted;
     try {
+      if (itemId){
+        const inv = await fsGetList("inventory");
+        const invIdx = inv.findIndex(x => x.id === itemId);
+        if (invIdx >= 0){
+          let avail = availableQtyOf(inv[invIdx]);
+          const totalQty = Number(inv[invIdx].quantity || 0);
+          if ((status === "active" || status === "late") && !prevAdjusted){
+            // البدلة بتخرج من المخزون لأول مرة في العملية دي
+            avail = Math.max(0, avail - 1);
+            stockAdjusted = true;
+            inv[invIdx].status = "rented";
+          } else if (status === "laundry"){
+            // رجعت من العميل بس لسه في الغسيل — تفضل غير متاحة
+            inv[invIdx].status = "laundry";
+          } else if (status === "returned" && prevAdjusted){
+            // خلصت غسيل ورجعت تتاح تاني
+            avail = Math.min(totalQty, avail + 1);
+            stockAdjusted = false;
+            inv[invIdx].status = avail > 0 ? "available" : inv[invIdx].status;
+          }
+          inv[invIdx].availableQty = avail;
+          await fsSaveList("inventory", inv);
+        }
+      }
+      const r = { id, customerName, itemId, itemDesc, rentDate, dueDate, price, deposit, status, notes, stockAdjusted, _ts: Date.now() };
       const arr = await fsGetList("rentals");
       const idx = arr.findIndex(x => x.id === id);
       if (idx >= 0) arr[idx] = r; else arr.unshift(r);
       await fsSaveList("rentals", arr);
-      if (itemId){
-        try {
-          const inv = await fsGetList("inventory");
-          const invIdx = inv.findIndex(x => x.id === itemId);
-          if (invIdx >= 0){
-            inv[invIdx].status = (status === "returned") ? "available" : "rented";
-            await fsSaveList("inventory", inv);
-          }
-        } catch(e2){}
-      }
       closeModal();
       pollOnce();
     } catch(err){
@@ -1416,7 +1449,10 @@ function bindModalEvents(){
           const inv = await fsGetList("inventory");
           const invIdx = inv.findIndex(x => x.id === itemId);
           if (invIdx >= 0){
-            inv[invIdx].quantity = Math.max(0, Number(inv[invIdx].quantity||0) - Number(quantity));
+            const sold = Number(quantity);
+            const avail = availableQtyOf(inv[invIdx]);
+            inv[invIdx].quantity = Math.max(0, Number(inv[invIdx].quantity||0) - sold);
+            inv[invIdx].availableQty = Math.max(0, avail - sold);
             await fsSaveList("inventory", inv);
           }
         } catch(e2){}
