@@ -174,6 +174,15 @@ async function fsList(collection){
   });
 }
 
+async function fsGetList(name){
+  const doc = await fsGetDoc("config", name);
+  if (!doc || !doc.data) return [];
+  try { return JSON.parse(doc.data); } catch(e){ return []; }
+}
+async function fsSaveList(name, arr){
+  await fsSetDoc("config", name, { data: JSON.stringify(arr) });
+}
+
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,8); }
 function esc(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 
@@ -378,7 +387,7 @@ function bindAuthEvents(){
       try {
         const firstUser = { id:uid(), username:username, pin:pin, role:"admin" };
         await fsSetDoc("config", "shop", { shopName:shopName });
-        await fsSetDoc("users", firstUser.id, firstUser);
+        await fsSaveList("users", [firstUser]);
         state.shopName = shopName; state.username = username; state.authed = true;
         afterLogin();
       } catch(err){
@@ -389,7 +398,7 @@ function bindAuthEvents(){
       if (!username) return showErr("اكتب اسم المستخدم");
       submitBtn.disabled = true; submitBtn.textContent = "جاري الدخول...";
       try {
-        const users = await fsList("users");
+        const users = await fsGetList("users");
         const match = users.find(u => u.username.trim().toLowerCase() === username.toLowerCase() && u.pin === pin);
         if (match){
           state.username = match.username; state.authed = true;
@@ -424,7 +433,7 @@ function subscribeData(){
 }
 async function pollOnce(){
   try {
-    const [inv, cust] = await Promise.all([fsList("inventory"), fsList("customers")]);
+    const [inv, cust] = await Promise.all([fsGetList("inventory"), fsGetList("customers")]);
     inv.sort((a,b) => (b._ts||0) - (a._ts||0));
     cust.sort((a,b) => (b._ts||0) - (a._ts||0));
     state.inventory = inv;
@@ -772,13 +781,13 @@ function renderUsersModal(){
 async function openUsersModal(){
   openModal({ type:"users" });
   try {
-    state.usersCache = await fsList("users");
+    state.usersCache = await fsGetList("users");
   } catch(e){ state.usersCache = []; }
   if (state.modal && state.modal.type === "users") renderModalInto();
 }
 async function refreshUsersCache(){
   try {
-    state.usersCache = await fsList("users");
+    state.usersCache = await fsGetList("users");
   } catch(e){}
 }
 
@@ -904,7 +913,10 @@ function bindModalEvents(){
     mSave.disabled = true; mSave.textContent = "جاري الحفظ...";
     const item = { id, type, name, size, color, quantity:Number(quantity), price, status, _ts: Date.now() };
     try {
-      await fsSetDoc("inventory", id, item);
+      const arr = await fsGetList("inventory");
+      const idx = arr.findIndex(x => x.id === id);
+      if (idx >= 0) arr[idx] = item; else arr.unshift(item);
+      await fsSaveList("inventory", arr);
       closeModal();
       pollOnce();
     } catch(err){
@@ -926,7 +938,10 @@ function bindModalEvents(){
     mCSave.disabled = true; mCSave.textContent = "جاري الحفظ...";
     const c = { id, name, phone, measurements, notes, _ts: Date.now() };
     try {
-      await fsSetDoc("customers", id, c);
+      const arr = await fsGetList("customers");
+      const idx = arr.findIndex(x => x.id === id);
+      if (idx >= 0) arr[idx] = c; else arr.unshift(c);
+      await fsSaveList("customers", arr);
       closeModal();
       pollOnce();
     } catch(err){
@@ -942,19 +957,22 @@ function bindModalEvents(){
   if (confirmYes && state.modal){
     if (state.modal.type === "confirmDeleteItem"){
       confirmYes.addEventListener("click", async () => {
-        await fsDeleteDoc("inventory", state.modal.id);
+        const arr = await fsGetList("inventory");
+        await fsSaveList("inventory", arr.filter(x => x.id !== state.modal.id));
         closeModal();
         pollOnce();
       });
     } else if (state.modal.type === "confirmDeleteCust"){
       confirmYes.addEventListener("click", async () => {
-        await fsDeleteDoc("customers", state.modal.id);
+        const arr = await fsGetList("customers");
+        await fsSaveList("customers", arr.filter(x => x.id !== state.modal.id));
         closeModal();
         pollOnce();
       });
     } else if (state.modal.type === "confirmDeleteUser"){
       confirmYes.addEventListener("click", async () => {
-        await fsDeleteDoc("users", state.modal.id);
+        const arr = await fsGetList("users");
+        await fsSaveList("users", arr.filter(x => x.id !== state.modal.id));
         await refreshUsersCache();
         state.modal = { type:"users" };
         renderModalInto();
@@ -978,7 +996,9 @@ function bindModalEvents(){
     nuAdd.disabled = true; nuAdd.textContent = "جاري الإضافة...";
     try {
       const newId = uid();
-      await fsSetDoc("users", newId, { id:newId, username:name, pin:pin, role:"staff" });
+      const arr = await fsGetList("users");
+      arr.push({ id:newId, username:name, pin:pin, role:"staff" });
+      await fsSaveList("users", arr);
     } catch(e){}
     await refreshUsersCache();
     state.modal = { type:"users" };
